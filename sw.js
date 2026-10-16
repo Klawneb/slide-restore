@@ -1,8 +1,9 @@
 // Offline support: serve the app from cache, refresh the cache in the
 // background so updates appear the next time the app is opened.
-// Bump VERSION whenever files are added or renamed.
+// Bump VERSION on every release: a changed sw.js is what makes installed
+// copies download the new files and switch over.
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = `slide-restore-${VERSION}`;
 const FILES = [
   './',

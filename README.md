@@ -25,8 +25,8 @@ photos are never uploaded anywhere.
 3. The app will be at `https://<username>.github.io/<repo>/`.
 
 ### Updating
-Push changes, and bump `VERSION` in `sw.js` (needed when files are added/renamed).
-The tablet picks up the new version the next time the app is opened (sometimes the time after).
+Push changes, and bump `VERSION` in `sw.js` every time (that is what tells installed copies to update).
+The app checks for updates whenever it is opened or brought back on screen, and switches to the new version as soon as it is on the home screen (never in the middle of editing).
 
 ## Development
 ```

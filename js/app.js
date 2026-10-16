@@ -7,7 +7,12 @@ import { pickFiles } from './io.js';
 
 const screens = ['home', 'editor', 'batch'];
 
+let updateReady = false;
+
 function show(name) {
+  // A new version was downloaded: switch to it when back on the home screen,
+  // so no work in progress is lost.
+  if (name === 'home' && updateReady) { location.reload(); return; }
   screens.forEach((s) => document.getElementById(s).classList.toggle('active', s === name));
 }
 
@@ -47,6 +52,19 @@ initBatch({
   },
 });
 
+// Updates: Android often just resumes an installed app instead of reloading
+// it, so also check for a new version whenever the app comes back on screen.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return; // first install, nothing to update
+    updateReady = true;
+    if (document.getElementById('home').classList.contains('active')) location.reload();
+  });
+  window.addEventListener('load', async () => {
+    const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  });
 }
