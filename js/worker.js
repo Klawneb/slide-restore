@@ -2,10 +2,19 @@
 // Keeps the UI responsive even on very large scans.
 
 import { analyze } from './processing/analyze.js';
-import { render } from './processing/render.js';
-import { detectCrop, cropImage, isFullCrop } from './processing/crop.js';
+import { render, rotate } from './processing/render.js';
+import { detectCrop, applyCrop, isFullCrop, rotateCrop } from './processing/crop.js';
 
-const previews = new Map(); // key → ImageData kept for fast re-rendering
+const previews = new Map(); // key → { img, framed } kept for fast re-rendering
+
+function subImage(img, x, y, w, h) {
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let row = 0; row < h; row++) {
+    const s = ((y + row) * img.width + x) * 4;
+    out.set(img.data.subarray(s, s + w * 4), row * w * 4);
+  }
+  return { width: w, height: h, data: out };
+}
 
 function fit(w, h, max) {
   const s = Math.min(1, max / Math.max(w, h));
@@ -42,7 +51,7 @@ function analysisInputs(bmp) {
 function analyzeCrop({ small, detail, W, H }, c) {
   if (isFullCrop(c)) return analyze(small, detail, Math.max(W, H));
   const long = Math.max(W * (c.x1 - c.x0), H * (c.y1 - c.y0));
-  return analyze(cropImage(small, c), detail, long);
+  return analyze(applyCrop(small, c), detail, long);
 }
 
 const handlers = {
@@ -65,7 +74,7 @@ const handlers = {
       }
     }
     bmp.close();
-    previews.set(key, preview);
+    previews.set(key, { img: preview, framed: null, full: null });
     const copy = new ImageData(new Uint8ClampedArray(preview.data), pw, ph);
     return { result: { original: copy, fullWidth: W, fullHeight: H, autoCrop, autos }, transfer: [copy.data.buffer] };
   },
@@ -79,10 +88,43 @@ const handlers = {
   },
 
   render({ key, base, adj, rot, crop }) {
-    const img = previews.get(key);
-    if (!img) throw new Error('NOT_PREPARED');
-    const out = render(cropImage(img, crop), base, adj, rot);
+    const entry = previews.get(key);
+    if (!entry) throw new Error('NOT_PREPARED');
+    // Straightening resamples the whole preview, so keep the last result.
+    const ck = JSON.stringify(crop ?? null);
+    if (entry.framed?.key !== ck) entry.framed = { key: ck, img: applyCrop(entry.img, crop) };
+    const out = render(entry.framed.img, base, adj, rot);
     const data = new ImageData(out.data, out.width, out.height);
+    return { result: data, transfer: [data.data.buffer] };
+  },
+
+  // Full-resolution render of part of the photo, for zooming in. region is
+  // a rectangle of the photo as shown (cropped and rotated), in 0..1.
+  async detail({ key, file, base, adj, rot, crop, region }) {
+    const entry = previews.get(key);
+    if (!entry) throw new Error('NOT_PREPARED');
+    const ck = JSON.stringify(crop ?? null);
+    if (entry.full?.key !== ck) {
+      entry.full = null; // free the old one first
+      const bmp = await decode(file);
+      const whole = draw(bmp, 0, 0, bmp.width, bmp.height, bmp.width, bmp.height);
+      bmp.close();
+      entry.full = { key: ck, img: applyCrop(whole, crop) };
+    }
+    const img = entry.full.img;
+    const r = rotateCrop(region, -rot);
+    // A margin so sharpening and dust removal behave as on the whole photo.
+    const pad = 24;
+    const x0 = Math.max(0, Math.floor(r.x0 * img.width) - pad), x1 = Math.min(img.width, Math.ceil(r.x1 * img.width) + pad);
+    const y0 = Math.max(0, Math.floor(r.y0 * img.height) - pad), y1 = Math.min(img.height, Math.ceil(r.y1 * img.height) + pad);
+    const sub = subImage(img, x0, y0, x1 - x0, y1 - y0);
+    const out = render(sub, base, adj, 0, Math.max(img.width, img.height));
+    // Trim the margin back off, then turn it the way it's shown.
+    const tx0 = Math.floor(r.x0 * img.width) - x0, ty0 = Math.floor(r.y0 * img.height) - y0;
+    const tw = Math.max(1, Math.min(out.width - tx0, Math.ceil(r.x1 * img.width) - Math.floor(r.x0 * img.width)));
+    const th = Math.max(1, Math.min(out.height - ty0, Math.ceil(r.y1 * img.height) - Math.floor(r.y0 * img.height)));
+    const shown = rotate(subImage(out, tx0, ty0, tw, th), rot);
+    const data = new ImageData(shown.data, shown.width, shown.height);
     return { result: data, transfer: [data.data.buffer] };
   },
 
@@ -94,10 +136,16 @@ const handlers = {
   async export({ file, base, adj, rot, crop, quality }) {
     const bmp = await decode(file);
     const { width: W, height: H } = bmp;
-    const r = isFullCrop(crop) ? { x0: 0, y0: 0, x1: 1, y1: 1 } : crop;
-    const sx = Math.round(r.x0 * W), sy = Math.round(r.y0 * H);
-    const sw = Math.max(1, Math.round(r.x1 * W) - sx), sh = Math.max(1, Math.round(r.y1 * H) - sy);
-    const full = draw(bmp, sx, sy, sw, sh, sw, sh);
+    let full;
+    if (crop?.angle) {
+      // Straightening needs the whole scan to sample from.
+      full = applyCrop(draw(bmp, 0, 0, W, H, W, H), crop);
+    } else {
+      const r = isFullCrop(crop) ? { x0: 0, y0: 0, x1: 1, y1: 1 } : crop;
+      const sx = Math.round(r.x0 * W), sy = Math.round(r.y0 * H);
+      const sw = Math.max(1, Math.round(r.x1 * W) - sx), sh = Math.max(1, Math.round(r.y1 * H) - sy);
+      full = draw(bmp, sx, sy, sw, sh, sw, sh);
+    }
     bmp.close();
     const out = render(full, base, adj, rot);
     const c = new OffscreenCanvas(out.width, out.height);

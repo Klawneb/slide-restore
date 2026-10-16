@@ -1,7 +1,7 @@
 // Talks to the processing worker and holds per-photo state helpers.
 
 import { NEUTRAL_AUTO, ZERO_ADJ, rotate } from './processing/render.js';
-import { cropImage, isFullCrop } from './processing/crop.js';
+import { applyCrop, isFullCrop } from './processing/crop.js';
 
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 const pending = new Map();
@@ -31,7 +31,8 @@ export function newPhoto(file) {
     name: file.name || 'photo.jpg',
     autos: {},        // Auto Fix settings, per crop (see cropKey)
     autoCrop: undefined, // detected slide-mount crop; null if none, undefined until looked for
-    crop: null,       // current crop rectangle (fractions of the unrotated photo), null = whole
+    crop: null,       // current crop rectangle and straightening angle (of the unrotated photo), null = whole
+    dust: false,      // remove dust specks
     useAuto: false,   // whether Auto Fix is switched on
     adj: { ...ZERO_ADJ },
     rot: 0,
@@ -39,19 +40,19 @@ export function newPhoto(file) {
   };
 }
 
-const cropKey = (c) => (isFullCrop(c) ? 'full' : [c.x0, c.y0, c.x1, c.y1].map((v) => v.toFixed(4)).join(','));
+const cropKey = (c) => (isFullCrop(c) ? 'full' : [c.x0, c.y0, c.x1, c.y1, c.angle || 0].map((v) => v.toFixed(4)).join(','));
 
 export const autoParams = (photo) => photo.autos[cropKey(photo.crop)];
 
 // Settings the sliders are relative to: Auto Fix if on, otherwise "no change".
 export function baseParams(photo) {
   const auto = autoParams(photo);
-  if (photo.useAuto) return auto;
-  return { ...NEUTRAL_AUTO, sharpRadius: auto.sharpRadius, sharpThreshold: auto.sharpThreshold };
+  if (photo.useAuto) return { ...auto, dust: photo.dust };
+  return { ...NEUTRAL_AUTO, sharpRadius: auto.sharpRadius, sharpThreshold: auto.sharpThreshold, dust: photo.dust };
 }
 
 export function isEdited(photo) {
-  return photo.useAuto || photo.rot % 4 !== 0 || !isFullCrop(photo.crop)
+  return photo.useAuto || photo.dust || photo.rot % 4 !== 0 || !isFullCrop(photo.crop)
     || Object.values(photo.adj).some((v) => v !== 0);
 }
 
@@ -85,9 +86,15 @@ export function renderPreview(handle, photo) {
   return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop });
 }
 
-// The whole photo (ignoring the crop), for the crop screen.
-export function renderUncropped(handle, photo) {
-  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: null });
+// The whole photo (ignoring the crop, but straightened by angle), for the crop screen.
+export function renderUncropped(handle, photo, angle = 0) {
+  const crop = angle ? { x0: 0, y0: 0, x1: 1, y1: 1, angle } : null;
+  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop });
+}
+
+// Full-resolution render of part of the photo as shown (region in 0..1).
+export function renderDetail(handle, photo, region) {
+  return call('detail', { key: handle.key, file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, region });
 }
 
 export function forget(handle) {
@@ -99,7 +106,7 @@ export function exportJpeg(photo, quality = 0.95) {
 }
 
 export function rotatedOriginal(original, rot, crop = null) {
-  const r = rotate(cropImage(original, crop), rot);
+  const r = rotate(applyCrop(original, crop), rot);
   return r === original ? original : new ImageData(r.data, r.width, r.height);
 }
 

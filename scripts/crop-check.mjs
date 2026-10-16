@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import jpeg from 'jpeg-js';
-import { detectCrop } from '../js/processing/crop.js';
+import { detectCrop, transform } from '../js/processing/crop.js';
 
 const [outDir, ...files] = process.argv.slice(2);
 mkdirSync(outDir, { recursive: true });
@@ -34,7 +34,8 @@ for (const f of files) {
   const ms = (performance.now() - t).toFixed(0);
   const name = basename(f, '.jpg').slice(0, 8);
   console.log(name, ms + 'ms', JSON.stringify(c, (k, v) => (typeof v === 'number' ? +v.toFixed(4) : v)));
-  const img = small;
+  // Show the straightened scan the crop applies to.
+  const img = c ? transform(small, c.angle, null) : small;
   if (c) {
     const X0 = Math.round(c.x0 * img.width), X1 = Math.round(c.x1 * img.width) - 1;
     const Y0 = Math.round(c.y0 * img.height), Y1 = Math.round(c.y1 * img.height) - 1;

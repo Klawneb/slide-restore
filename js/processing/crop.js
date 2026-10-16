@@ -7,21 +7,50 @@
 // mount to be one even colour, we work inwards from each side looking for
 // the film's dark rim, then skip it.
 //
-// Crop rectangles are fractions of the image: { x0, y0, x1, y1 } in 0..1.
+// Crop rectangles are fractions of the image: { x0, y0, x1, y1 } in 0..1,
+// with an optional angle: degrees clockwise to straighten the image by
+// first (the rectangle is then of the straightened image).
 
 import { clamp } from './color.js';
 
 export const FULL_CROP = Object.freeze({ x0: 0, y0: 0, x1: 1, y1: 1 });
 
 export function isFullCrop(c) {
-  return !c || (c.x0 <= 0.001 && c.y0 <= 0.001 && c.x1 >= 0.999 && c.y1 >= 0.999);
+  return !c || (!c.angle && c.x0 <= 0.001 && c.y0 <= 0.001 && c.x1 >= 0.999 && c.y1 >= 0.999);
+}
+
+// Straighten and crop an image as a crop describes.
+export function applyCrop(img, c) {
+  return transform(img, c?.angle || 0, c);
 }
 
 const SIDES = ['left', 'right', 'top', 'bottom'];
 
-// Returns a crop rectangle, or null when there is no mount to remove.
+// Returns a crop rectangle plus the rotation that straightens the picture
+// ({ x0, y0, x1, y1, angle }, angle in degrees clockwise; the rectangle is
+// of the straightened image), or null when there is no mount to remove.
 export function detectCrop(input) {
   const img = shrink(input, 640); // plenty of detail for finding edges, and quick
+  const first = detectRect(img);
+  if (!first) return null;
+  // Straighten by the measured tilt, then measure again on the result: the
+  // second look both tightens the crop and corrects any leftover tilt.
+  let best = first, angle = 0;
+  for (let it = 0; it < 2 && best.tilt != null && Math.abs(best.tilt) >= 0.15; it++) {
+    const next = clamp(angle - best.tilt, -MAX_TILT, MAX_TILT);
+    const r = detectRect(transform(img, next, null));
+    if (!r) break;
+    best = r; angle = next;
+  }
+  if (Math.abs(angle) < 0.2) { best = first; angle = 0; }
+  return { ...best.rect, angle: Math.round(angle * 100) / 100 };
+}
+
+const MAX_TILT = 5; // degrees: more than this is deliberate, not a crooked slide
+
+// Crop rectangle of the mount's opening in this image, and the picture's
+// tilt in degrees clockwise (null if it couldn't be measured).
+function detectRect(img) {
   const { width: w, height: h } = img;
   if (w < 32 || h < 32) return null;
   const L = lumaPlane(img);
@@ -91,7 +120,20 @@ export function detectCrop(input) {
   };
   if (rect.x1 - rect.x0 < 0.35 || rect.y1 - rect.y0 < 0.35) return null;
   if (isFullCrop(rect)) return null;
-  return rect;
+
+  // Tilt: each side's edge slope, turned into a clockwise angle. At least
+  // two sides must agree (an edge with no dark rim can be misjudged); if
+  // they don't, it's not a simple tilt (bowed or bent mount).
+  const toDeg = 180 / Math.PI;
+  const sign = { left: -1, right: 1, top: 1, bottom: -1 };
+  const tilts = edges.filter((e) => e.slope != null).map((e) => sign[e.side] * Math.atan(e.slope) * toDeg);
+  let tilt = null;
+  if (tilts.length >= 2) {
+    const mid = median(tilts);
+    const agree = tilts.filter((t) => Math.abs(t - mid) <= 0.5);
+    if (agree.length >= 2) tilt = agree.reduce((x, y) => x + y, 0) / agree.length;
+  }
+  return { rect, tilt };
 }
 
 // Where the film starts in from this side ({ film } pixels), and how wide its
@@ -161,7 +203,8 @@ function filmEdge(img, L, s, span) {
   const found = [];
   for (let g = 0; g < SEGS; g++) {
     const e = segmentEdge(notMount[g], darkFrac[g], lineL[g], maxDepth, persist, long);
-    if (e) found.push(e);
+    // Where along the side this section's middle is (image x or y).
+    if (e) found.push({ ...e, at: a0 + ((g + 0.5) * n) / SEGS });
   }
   if (found.length < 2) return null;
   // Sections disagreeing wildly means something other than a straight film
@@ -170,7 +213,16 @@ function filmEdge(img, L, s, span) {
   const ok = found.filter((e) => Math.abs(e.out - mid) <= long * 0.03);
   if (ok.length < 2) return null;
   const rims = ok.map((e) => e.rim).filter((r) => r != null);
-  return { film: Math.max(...ok.map((e) => e.out)), rim: rims.length ? median(rims) : null };
+  // How the edge moves along the side (for straightening), from the outer
+  // and inner sections. Needs both ends.
+  let slope = null;
+  if (ok.length >= 2 && ok[ok.length - 1].at - ok[0].at > n * 0.5) {
+    const mx = ok.reduce((t, e) => t + e.at, 0) / ok.length, my = ok.reduce((t, e) => t + e.sub, 0) / ok.length;
+    let sxy = 0, sxx = 0;
+    for (const e of ok) { sxy += (e.at - mx) * (e.sub - my); sxx += (e.at - mx) ** 2; }
+    slope = sxy / sxx;
+  }
+  return { film: Math.max(...ok.map((e) => e.out)), rim: rims.length ? median(rims) : null, slope };
 }
 
 // One section of a side: where the film starts, and its rim width if visible.
@@ -208,7 +260,44 @@ function segmentEdge(notMount, darkFrac, lineL, maxDepth, persist, long) {
     while (inner < r0 && lineL[inner] < half) inner++;
     rim = inner - out;
   }
-  return { out, rim };
+  // Sub-pixel edge position: where the line crosses half "not mount".
+  const prev = notMount[out - 1], cur = Math.max(notMount[out], darkFrac[out]);
+  const sub = cur > prev ? out - 1 + clamp((0.5 - prev) / (cur - prev), 0, 1) : out;
+  return { out, rim, sub };
+}
+
+// Rotate an image by angle degrees clockwise about its centre (edges are
+// extended to fill the corners), then cut out a crop rectangle of the result.
+// Done in one go so a full-size scan is only resampled once.
+export function transform(img, angle, crop) {
+  if (!angle) return cropImage(img, crop);
+  const { width: W, height: H, data } = img;
+  const c = isFullCrop(crop) ? FULL_CROP : crop;
+  const ox = Math.round(c.x0 * W), oy = Math.round(c.y0 * H);
+  const cw = Math.max(1, Math.round(c.x1 * W) - ox), ch = Math.max(1, Math.round(c.y1 * H) - oy);
+  const out = new Uint8ClampedArray(cw * ch * 4);
+  const a = (angle * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+  const cx = (W - 1) / 2, cy = (H - 1) / 2;
+  for (let v = 0; v < ch; v++) {
+    const dy = oy + v - cy;
+    // Source position for the start of the row, then step along it.
+    let sx = cx + (ox - cx) * cos + dy * sin;
+    let sy = cy - (ox - cx) * sin + dy * cos;
+    for (let u = 0, o = v * cw * 4; u < cw; u++, o += 4, sx += cos, sy -= sin) {
+      const x = sx < 0 ? 0 : sx > W - 1 ? W - 1 : sx;
+      const y = sy < 0 ? 0 : sy > H - 1 ? H - 1 : sy;
+      const x0 = x | 0, y0 = y | 0;
+      const x1 = x0 < W - 1 ? x0 + 1 : x0, y1 = y0 < H - 1 ? y0 + 1 : y0;
+      const fx = x - x0, fy = y - y0;
+      const p00 = (y0 * W + x0) * 4, p01 = (y0 * W + x1) * 4, p10 = (y1 * W + x0) * 4, p11 = (y1 * W + x1) * 4;
+      const w00 = (1 - fx) * (1 - fy), w01 = fx * (1 - fy), w10 = (1 - fx) * fy, w11 = fx * fy;
+      out[o] = data[p00] * w00 + data[p01] * w01 + data[p10] * w10 + data[p11] * w11;
+      out[o + 1] = data[p00 + 1] * w00 + data[p01 + 1] * w01 + data[p10 + 1] * w10 + data[p11 + 1] * w11;
+      out[o + 2] = data[p00 + 2] * w00 + data[p01 + 2] * w01 + data[p10 + 2] * w10 + data[p11 + 2] * w11;
+      out[o + 3] = 255;
+    }
+  }
+  return { width: cw, height: ch, data: out };
 }
 
 // Box-filtered copy no larger than max on its long side.
@@ -269,7 +358,7 @@ function median(arr) {
 
 // Cut a crop rectangle out of an image. Returns the same image for no crop.
 export function cropImage(img, c) {
-  if (isFullCrop(c)) return img;
+  if (!c || (c.x0 <= 0.001 && c.y0 <= 0.001 && c.x1 >= 0.999 && c.y1 >= 0.999)) return img;
   const { width: w, height: h, data } = img;
   const x0 = clamp(Math.round(c.x0 * w), 0, w - 1), x1 = clamp(Math.round(c.x1 * w), x0 + 1, w);
   const y0 = clamp(Math.round(c.y0 * h), 0, h - 1), y1 = clamp(Math.round(c.y1 * h), y0 + 1, h);
@@ -287,6 +376,7 @@ export function cropImage(img, c) {
 export function rotateCrop(c, quarterTurns) {
   let r = { ...c };
   const q = ((quarterTurns % 4) + 4) % 4;
-  for (let i = 0; i < q; i++) r = { x0: 1 - r.y1, y0: r.x0, x1: 1 - r.y0, y1: r.x1 };
+  for (let i = 0; i < q; i++) r = { x0: 1 - r.y1, y0: r.x0, x1: 1 - r.y0, y1: r.x1, angle: c.angle };
+  if (!r.angle) delete r.angle;
   return r;
 }

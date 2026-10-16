@@ -122,6 +122,7 @@ $('batch-auto').addEventListener('click', async () => {
     const it = list[i];
     if (!it.photo.useAuto) {
       it.photo.useAuto = true;
+      it.photo.dust = true;
       it.photo.saved = false;
       try { await setCrop(it.photo, it.photo.autoCrop); } catch (err) { console.error(err); }
     }

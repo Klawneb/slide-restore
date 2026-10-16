@@ -4,6 +4,7 @@
 // (-100..100 each). Sliders nudge the auto values rather than replace them.
 
 import { clamp } from './color.js';
+import { removeDustInPlace } from './dust.js';
 
 export const NEUTRAL_AUTO = Object.freeze({
   black: [0, 0, 0],
@@ -18,6 +19,9 @@ export const NEUTRAL_AUTO = Object.freeze({
   sharpRadius: 0, // fraction of the image's long side
   sharpThreshold: 4,
   chromaRadius: 0, // fraction of the image's long side; 0 = no colour smoothing
+  shadowTint: null, // [r, g, b] added to shadows, fading out by mid-grey
+  shadowCalm: 0, // 0..1: less colour in near-black areas
+  dust: false, // remove dust specks
 });
 
 export const ZERO_ADJ = Object.freeze({
@@ -52,6 +56,9 @@ export function resolveParams(auto, adj = ZERO_ADJ) {
     sharpRadius: auto.sharpRadius,
     sharpThreshold: auto.sharpThreshold,
     chromaRadius: auto.chromaRadius ?? 0,
+    shadowTint: auto.shadowTint ?? null,
+    shadowCalm: auto.shadowCalm ?? 0,
+    dust: !!auto.dust,
   };
 }
 
@@ -100,6 +107,7 @@ export function applyColor(img, p) {
   const out = new Uint8ClampedArray(n);
   const vib = p.vibrance ?? 0, sat = p.saturation ?? 1;
   const doSat = vib !== 0 || sat !== 1;
+  const st = p.shadowTint, calm = p.shadowCalm ?? 0;
   for (let i = 0; i < n; i += 4) {
     let r = lr[src[i]], g = lg[src[i + 1]], b = lb[src[i + 2]];
     // A channel the scanner clipped is really "at least this bright", so let
@@ -109,6 +117,18 @@ export function applyColor(img, p) {
       r += (mx - r) * clipWeight(src[i]);
       g += (mx - g) * clipWeight(src[i + 1]);
       b += (mx - b) * clipWeight(src[i + 2]);
+    }
+    if (st) {
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      const wt = l >= 0.5 ? 0 : (1 - l * 2) * (1 - l * 2);
+      r += st[0] * wt; g += st[1] * wt; b += st[2] * wt;
+    }
+    if (calm > 0) {
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (l < 0.3) {
+        const u = l / 0.3, k = 1 - calm * (1 - u * u * (3 - 2 * u));
+        r = l + (r - l) * k; g = l + (g - l) * k; b = l + (b - l) * k;
+      }
     }
     if (doSat) {
       const l = 0.299 * r + 0.587 * g + 0.114 * b;
@@ -275,11 +295,17 @@ export function rotate(img, quarterTurns) {
   return { width: nw, height: nh, data: out };
 }
 
-// Full pipeline: colour → colour smoothing → sharpen → rotate.
-export function render(img, auto, adj, quarterTurns = 0) {
+// Largest dust speck removed, as a fraction of the photo's long side.
+const DUST_SIZE = 0.003;
+
+// Full pipeline: colour → dust → colour smoothing → sharpen → rotate.
+// longSide: the long side of the whole photo when img is only part of it
+// (zoomed-in detail), so sizes like the sharpening radius match.
+export function render(img, auto, adj, quarterTurns = 0, longSide = Math.max(img.width, img.height)) {
   const p = resolveParams(auto, adj);
   const out = applyColor(img, p);
-  const longSide = Math.max(img.width, img.height);
+  // Before sharpening, which would make specks stand out more.
+  if (p.dust) removeDustInPlace(out, Math.max(1.5, DUST_SIZE * longSide));
   smoothChromaInPlace(out, Math.min(4, p.chromaRadius * longSide));
   const sigma = clamp(p.sharpRadius * longSide, 0.6, 4);
   sharpenInPlace(out, p.sharpAmount, sigma, p.sharpThreshold);

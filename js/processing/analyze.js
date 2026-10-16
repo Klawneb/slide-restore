@@ -102,6 +102,35 @@ export function analyze(img, crop = null, fullLongSide = null) {
     p.curve = clamp((0.21 - std) * 3.5, 0, 0.5);
   }
 
+  // 4b. Shadows pushed past neutral. Removing a strong warm cast (lamplight
+  // indoors) leaves the parts lit by daylight from a window blue-purple,
+  // and the brightness and contrast steps magnify it. Pull such shadows
+  // back to grey; shadows that keep the original cast (sunsets) are left be.
+  {
+    const orig = greyishMean(img, NEUTRAL_AUTO, step, 0.05, 0.95);
+    const m = greyishMean(img, p, step, 0.04, 0.35);
+    if (orig && m) {
+      const [, a0, b0] = rgbToLab(orig[0], orig[1], orig[2]);
+      const [, a1, b1] = rgbToLab(m[0], m[1], m[2]);
+      const len0 = Math.hypot(a0, b0), len1 = Math.hypot(a1, b1);
+      const opposed = len0 > 1 && len1 > 1 ? -(a0 * a1 + b0 * b1) / (len0 * len1) : 0;
+      if (opposed > 0) {
+        const t = (m[0] + m[1] + m[2]) / 3;
+        // Shadow weights in render average about 0.6 over this range.
+        p.shadowTint = m.map((v) => clamp(((t - v) * opposed) / 0.6, -0.08, 0.08));
+      }
+      // Near-black areas: an offset would grey the blacks, so instead calm
+      // their colour when it has swung against the original cast.
+      const deep = darkMean(img, p, step, 0.12);
+      if (deep && len0 > 1) {
+        const [, a2, b2] = rgbToLab(deep[0], deep[1], deep[2]);
+        const len2 = Math.hypot(a2, b2);
+        const against = len2 > 1 ? -(a0 * a2 + b0 * b2) / (len0 * len2) : 0;
+        if (against > 0) p.shadowCalm = clamp((len2 / 12) * against, 0, 0.8);
+      }
+    }
+  }
+
   // 5. Saturation: faded slides lose colour; boost dull colours.
   {
     const c = applyColor(img, p).data;
@@ -155,6 +184,19 @@ function greyishMean(img, p, step, lo, hi) {
     sr += r * wgt; sg += g * wgt; sb += b * wgt; sw += wgt;
   }
   return sw > 0 ? [sr / sw, sg / sw, sb / sw] : null;
+}
+
+// Average colour (0..1) of all pixels darker than maxL after the settings.
+function darkMean(img, p, step, maxL) {
+  const [lr, lg, lb] = buildLuts(p);
+  let sr = 0, sg = 0, sb = 0, n = 0;
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4 * step) {
+    const r = lr[d[i]], g = lg[d[i + 1]], b = lb[d[i + 2]];
+    if (0.299 * r + 0.587 * g + 0.114 * b > maxL) continue;
+    sr += r; sg += g; sb += b; n++;
+  }
+  return n > 50 ? [sr / n, sg / n, sb / n] : null;
 }
 
 function cloneAuto(a) {

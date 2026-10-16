@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { analyze, lumaPlane, reblurRatio } from '../js/processing/analyze.js';
-import { render, rotate, applyColor, resolveParams } from '../js/processing/render.js';
+import { render, rotate, applyColor, resolveParams, NEUTRAL_AUTO } from '../js/processing/render.js';
 import { meanLab, histograms, percentile, rgbToLab } from '../js/processing/color.js';
-import { detectCrop, cropImage, rotateCrop } from '../js/processing/crop.js';
+import { detectCrop, cropImage, rotateCrop, transform } from '../js/processing/crop.js';
 
 const W = 240, H = 160;
 
@@ -278,6 +278,30 @@ describe('auto crop', () => {
     expect(detectCrop(shady)).toBeNull();
   });
 
+  it('measures and straightens a crooked slide', () => {
+    const tilted = transform(mounted(), 2, null); // picture turned 2° clockwise
+    const c = detectCrop(tilted);
+    expect(c).not.toBeNull();
+    expect(c.angle).toBeGreaterThan(-2.4);
+    expect(c.angle).toBeLessThan(-1.6);
+    // Straightened and cropped, it's the picture again, rim-free.
+    const fixed = transform(tilted, c.angle, c);
+    expect(Math.abs(fixed.width - (W - 2 * RIM))).toBeLessThan(12);
+    expect(Math.abs(fixed.height - (H - 2 * RIM))).toBeLessThan(12);
+    expect(detectCrop(mounted()).angle).toBe(0);
+  });
+
+  it('rotates by small angles about the centre', () => {
+    const img = scene();
+    const back = transform(transform(img, 3, null), -3, null);
+    let diff = 0, n = 0;
+    for (let y = 40; y < H - 40; y++) for (let x = 40; x < W - 40; x++) {
+      const p = (y * W + x) * 4;
+      diff += Math.abs(back.data[p] - img.data[p]); n++;
+    }
+    expect(diff / n).toBeLessThan(6);
+  });
+
   it('crops images and maps crops through rotation', () => {
     const c = { x0: 0.1, y0: 0.2, x1: 0.7, y1: 0.9 };
     const back = rotateCrop(rotateCrop(c, 1), -1);
@@ -287,5 +311,49 @@ describe('auto crop', () => {
     const a = rotate(cropImage(img, c), 1), b = cropImage(rotate(img, 1), rotateCrop(c, 1));
     expect([a.width, a.height]).toEqual([b.width, b.height]);
     expect(Array.from(a.data)).toEqual(Array.from(b.data));
+  });
+});
+
+describe('dust removal', () => {
+  // A smooth sky-like gradient with a few isolated specks, plus a patch of
+  // clustered bright spots (like light through leaves) that must stay.
+  function dusty() {
+    const w = 400, h = 300, data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const v = 150 + (x / w) * 50;
+      data.set([v - 20, v, v + 30, 255], (y * w + x) * 4);
+    }
+    const dot = (cx, cy, rad, c) => {
+      for (let y = cy - rad; y <= cy + rad; y++) for (let x = cx - rad; x <= cx + rad; x++) {
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= rad * rad) data.set([c, c, c, 255], (y * w + x) * 4);
+      }
+    };
+    const specks = [[60, 60, 1, 40], [200, 80, 2, 30], [120, 200, 1, 250], [320, 150, 1, 60]];
+    for (const [x, y, rad, c] of specks) dot(x, y, rad, c);
+    // Dark foliage with many small glints.
+    for (let y = 200; y < 290; y++) for (let x = 250; x < 390; x++) data.set([20, 30, 15, 255], (y * w + x) * 4);
+    const glints = [];
+    for (let gy = 208; gy < 285; gy += 11) for (let gx = 258; gx < 385; gx += 13) { dot(gx, gy, 1, 230); glints.push([gx, gy]); }
+    return { img: { width: w, height: h, data }, specks, glints };
+  }
+  const lum = (img, x, y) => { const p = (y * img.width + x) * 4; return 0.299 * img.data[p] + 0.587 * img.data[p + 1] + 0.114 * img.data[p + 2]; };
+
+  it('removes isolated specks on smooth areas and keeps clustered texture', () => {
+    const { img, specks, glints } = dusty();
+    const before = { ...img, data: new Uint8ClampedArray(img.data) };
+    const out = render(img, { ...NEUTRAL_AUTO, dust: true }, {});
+    for (const [x, y] of specks) {
+      const bg = lum(before, x + 8, y);
+      expect(Math.abs(lum(out, x, y) - bg)).toBeLessThan(10);
+    }
+    for (const [x, y] of glints) expect(lum(out, x, y)).toBeGreaterThan(150);
+  });
+
+  it('leaves photos alone when switched off', () => {
+    const { img } = dusty();
+    const a = render(img, { ...NEUTRAL_AUTO, dust: false }, {});
+    let diff = 0;
+    for (let i = 0; i < a.data.length; i++) if (Math.abs(a.data[i] - img.data[i]) > 1) diff++;
+    expect(diff).toBe(0);
   });
 });

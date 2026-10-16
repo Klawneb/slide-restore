@@ -1,6 +1,9 @@
-// Single-photo editor: Auto Fix, sliders, before/after, crop, rotate, save.
+// Single-photo editor: Auto Fix, sliders, before/after, crop and straighten,
+// rotate, dust removal, zoom, save.
 
-import { prepare, renderPreview, renderUncropped, setCrop, forget, exportJpeg, rotatedOriginal, latestOnly } from './engine.js';
+import {
+  prepare, renderPreview, renderUncropped, renderDetail, setCrop, forget, exportJpeg, rotatedOriginal, latestOnly,
+} from './engine.js';
 import { ZERO_ADJ } from './processing/render.js';
 import { FULL_CROP, rotateCrop } from './processing/crop.js';
 import { restoredName, saveBlob, canShareFiles, shareFiles, toast, busy, friendlyError } from './io.js';
@@ -9,10 +12,12 @@ const $ = (id) => document.getElementById(id);
 const frame = $('frame');
 const cvAfter = $('cv-after');
 const cvBefore = $('cv-before');
+const cvDetail = $('cv-detail');
 const splitLine = $('split-line');
 const autoBtn = $('btn-auto');
 const editor = $('editor');
 const cropBox = $('crop-box');
+const angleSlider = $('crop-angle');
 const sliders = [...document.querySelectorAll('#sliders input[type=range]')];
 
 let photo = null;
@@ -21,6 +26,7 @@ let original = null;
 let split = 0.5;
 let onClose = null;
 let cropRect = null; // while cropping: the rectangle as shown (after rotation)
+let cropAngle = 0; // while cropping: the straightening angle being tried
 
 function previewSize() {
   const r = frame.getBoundingClientRect();
@@ -31,13 +37,14 @@ function previewSize() {
 const refresh = latestOnly(async () => {
   if (!handle) return;
   const h = handle;
-  const img = await (cropRect ? renderUncropped : renderPreview)(h, photo);
+  const img = await (cropRect ? renderUncropped(h, photo, cropAngle) : renderPreview(h, photo));
   if (h !== handle) return; // photo changed meanwhile
   cvAfter.width = img.width; cvAfter.height = img.height;
   cvAfter.getContext('2d').putImageData(img, 0, 0);
   drawBefore();
   layoutOverlay();
   layoutCrop();
+  requestDetail();
 });
 
 function drawBefore() {
@@ -69,6 +76,7 @@ function syncControls() {
   autoBtn.classList.toggle('on', photo.useAuto);
   autoBtn.querySelector('use').setAttribute('href', photo.useAuto ? '#i-check' : '#i-auto');
   autoBtn.querySelector('.auto-label').textContent = photo.useAuto ? 'Auto Fix is on' : 'Auto Fix';
+  $('btn-dust').setAttribute('aria-pressed', String(photo.dust));
 }
 
 // The number beside each slider name: 0 in the middle, +/- either side.
@@ -87,6 +95,7 @@ export async function openEditor(p, { inBatch = false, onBack } = {}) {
   $('btn-share').hidden = inBatch || !canShareFiles();
   $('photo-name').textContent = photo.name;
   endCropMode();
+  resetZoom();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
   const ctx = cvAfter.getContext('2d');
@@ -123,11 +132,16 @@ function changed() {
 
 autoBtn.addEventListener('click', async () => {
   photo.useAuto = true;
+  photo.dust = true;
   photo.adj = { ...ZERO_ADJ };
   await withBusy(() => setCrop(photo, photo.autoCrop));
+  resetZoom();
   syncControls();
   changed();
-  toast(photo.autoCrop ? 'Auto Fix applied, slide border cropped off' : 'Auto Fix applied');
+  const a = photo.autoCrop;
+  toast(!a ? 'Auto Fix applied'
+    : a.angle ? 'Auto Fix applied, border cropped off and picture straightened'
+      : 'Auto Fix applied, slide border cropped off');
 });
 
 // Shows the spinner only if the work takes a noticeable time.
@@ -153,9 +167,11 @@ sliders.forEach((s) => {
 
 $('btn-reset').addEventListener('click', async () => {
   photo.useAuto = false;
+  photo.dust = false;
   photo.adj = { ...ZERO_ADJ };
   photo.rot = 0;
   await withBusy(() => setCrop(photo, null));
+  resetZoom();
   syncControls();
   changed();
   toast('Back to the original');
@@ -163,7 +179,15 @@ $('btn-reset').addEventListener('click', async () => {
 
 $('btn-rotate').addEventListener('click', () => {
   photo.rot = (photo.rot + 1) % 4;
+  resetZoom();
   changed();
+});
+
+$('btn-dust').addEventListener('click', () => {
+  photo.dust = !photo.dust;
+  syncControls();
+  changed();
+  toast(photo.dust ? 'Removing dust specks' : 'Dust removal off');
 });
 
 $('btn-back').addEventListener('click', close);
@@ -185,30 +209,182 @@ $('btn-compare').addEventListener('click', (e) => {
   layoutOverlay();
 });
 function dragSplit(e) {
-  if (!frame.classList.contains('split')) return;
   const a = cvAfter.getBoundingClientRect();
   split = Math.min(1, Math.max(0, (e.clientX - a.left) / a.width));
   layoutOverlay();
 }
+
+window.addEventListener('resize', () => {
+  if (!handle) return;
+  resetZoom();
+  layoutOverlay();
+  layoutCrop();
+});
+
+// ---------- Zoom ----------
+// Pinch (or double-tap, or the mouse wheel) to zoom; drag to look around.
+// While moving, the screen-sized preview is simply enlarged; once still, the
+// part on screen is rendered from the full-resolution scan so true detail
+// (sharpness, grain, dust) can be judged.
+
+const zoom = { s: 1, tx: 0, ty: 0 };
+const pointers = new Map();
+let gesture = null;
+let lastTap = { t: 0, x: 0, y: 0 };
+
+function maxZoom() {
+  // Up to twice the scan's own resolution on screen.
+  if (!photo?.fullWidth) return 4;
+  const c = photo.crop ?? FULL_CROP;
+  const w = photo.fullWidth * (c.x1 - c.x0), h = photo.fullHeight * (c.y1 - c.y0);
+  const across = photo.rot % 2 ? h : w; // scan pixels across the picture as shown
+  const shown = (cvAfter.offsetWidth || 1) * Math.min(devicePixelRatio || 1, 2);
+  return Math.min(10, Math.max(2, (across / shown) * 2));
+}
+
+function applyZoom() {
+  const w = cvAfter.offsetWidth, h = cvAfter.offsetHeight;
+  const fw = frame.clientWidth, fh = frame.clientHeight;
+  zoom.s = Math.min(maxZoom(), Math.max(1, zoom.s));
+  const limX = Math.max(0, (w * zoom.s - fw) / 2), limY = Math.max(0, (h * zoom.s - fh) / 2);
+  zoom.tx = Math.min(limX, Math.max(-limX, zoom.tx));
+  zoom.ty = Math.min(limY, Math.max(-limY, zoom.ty));
+  if (zoom.s <= 1.001) { zoom.s = 1; zoom.tx = 0; zoom.ty = 0; }
+  cvAfter.style.transform = zoom.s === 1 ? '' : `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.s})`;
+  frame.classList.toggle('zoomed', zoom.s > 1);
+  $('zoom-out').hidden = zoom.s === 1;
+  layoutOverlay();
+}
+
+function resetZoom() {
+  zoom.s = 1; zoom.tx = 0; zoom.ty = 0;
+  cvDetail.classList.remove('ready');
+  applyZoom();
+}
+
+// Zoom by factor k keeping the point (px, py) (client coordinates) still.
+function zoomAt(k, px, py) {
+  const f = frame.getBoundingClientRect();
+  const cx = px - (f.left + f.width / 2), cy = py - (f.top + f.height / 2);
+  const s1 = Math.min(maxZoom(), Math.max(1, zoom.s * k));
+  const r = s1 / zoom.s;
+  zoom.tx = cx - (cx - zoom.tx) * r;
+  zoom.ty = cy - (cy - zoom.ty) * r;
+  zoom.s = s1;
+  applyZoom();
+}
+
+// Ask for full-resolution detail of what's on screen, once things are still.
+let detailTimer = 0, detailSeq = 0;
+function requestDetail() {
+  clearTimeout(detailTimer);
+  cvDetail.classList.remove('ready');
+  if (zoom.s <= 1 || cropRect || !handle) return;
+  detailTimer = setTimeout(async () => {
+    const f = frame.getBoundingClientRect(), a = cvAfter.getBoundingClientRect();
+    const vx0 = Math.max(f.left, a.left), vx1 = Math.min(f.right, a.right);
+    const vy0 = Math.max(f.top, a.top), vy1 = Math.min(f.bottom, a.bottom);
+    if (vx1 <= vx0 || vy1 <= vy0) return;
+    // Only worth it once the preview's own pixels are being enlarged.
+    if (a.width * Math.min(devicePixelRatio || 1, 2) < cvAfter.width * 1.15) return;
+    const region = {
+      x0: (vx0 - a.left) / a.width, x1: (vx1 - a.left) / a.width,
+      y0: (vy0 - a.top) / a.height, y1: (vy1 - a.top) / a.height,
+    };
+    const seq = ++detailSeq, h = handle, s = { ...zoom };
+    try {
+      const img = await renderDetail(h, photo, region);
+      if (seq !== detailSeq || h !== handle || s.s !== zoom.s || s.tx !== zoom.tx || s.ty !== zoom.ty) return;
+      cvDetail.width = img.width; cvDetail.height = img.height;
+      cvDetail.getContext('2d').putImageData(img, 0, 0);
+      Object.assign(cvDetail.style, {
+        left: `${vx0 - f.left}px`, top: `${vy0 - f.top}px`,
+        width: `${vx1 - vx0}px`, height: `${vy1 - vy0}px`,
+      });
+      cvDetail.classList.add('ready');
+    } catch (err) {
+      console.error(err);
+    }
+  }, 250);
+}
+
 frame.addEventListener('pointerdown', (e) => {
   if (cropRect) return;
   frame.setPointerCapture(e.pointerId);
-  dragSplit(e);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const [p, q] = [...pointers.values()];
+    gesture = { type: 'pinch', d: Math.hypot(p.x - q.x, p.y - q.y), mx: (p.x + q.x) / 2, my: (p.y + q.y) / 2 };
+    cvDetail.classList.remove('ready');
+    return;
+  }
+  // Double-tap: zoom in to that spot, or back out.
+  const now = Date.now();
+  if (now - lastTap.t < 300 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+    lastTap.t = 0;
+    if (zoom.s > 1) resetZoom(); else { zoomAt(3, e.clientX, e.clientY); requestDetail(); }
+    gesture = null;
+    return;
+  }
+  lastTap = { t: now, x: e.clientX, y: e.clientY };
+  if (frame.classList.contains('split')) { gesture = { type: 'split' }; dragSplit(e); }
+  else if (zoom.s > 1) { gesture = { type: 'pan', x: e.clientX, y: e.clientY }; cvDetail.classList.remove('ready'); }
+  else gesture = null;
 });
-frame.addEventListener('pointermove', (e) => { if (e.buttons) dragSplit(e); });
 
-window.addEventListener('resize', () => { if (handle) { layoutOverlay(); layoutCrop(); } });
+frame.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (gesture?.type === 'pinch' && pointers.size >= 2) {
+    const [p, q] = [...pointers.values()];
+    const d = Math.hypot(p.x - q.x, p.y - q.y), mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    zoom.tx += mx - gesture.mx; zoom.ty += my - gesture.my; // two-finger drag
+    zoomAt(d / Math.max(1, gesture.d), mx, my);
+    Object.assign(gesture, { d, mx, my });
+  } else if (gesture?.type === 'pan') {
+    zoom.tx += e.clientX - gesture.x; zoom.ty += e.clientY - gesture.y;
+    gesture.x = e.clientX; gesture.y = e.clientY;
+    applyZoom();
+  } else if (gesture?.type === 'split') {
+    dragSplit(e);
+  }
+});
 
-// ---------- Crop ----------
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) {
+    if (gesture?.type === 'pinch' || gesture?.type === 'pan') requestDetail();
+    gesture = null;
+  } else if (gesture?.type === 'pinch') {
+    // One finger lifted: carry on as a pan with the other.
+    const [p] = [...pointers.values()];
+    gesture = { type: 'pan', x: p.x, y: p.y };
+  }
+}
+['pointerup', 'pointercancel'].forEach((t) => frame.addEventListener(t, endPointer));
+
+frame.addEventListener('wheel', (e) => {
+  if (cropRect) return;
+  e.preventDefault();
+  zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+  requestDetail();
+}, { passive: false });
+
+$('zoom-out').addEventListener('pointerdown', (e) => e.stopPropagation());
+$('zoom-out').addEventListener('click', resetZoom);
+
+// ---------- Crop and straighten ----------
 // The whole photo is shown with a box over it; drag its corners or edges to
-// resize it, or drag inside it to move it.
+// resize it, or drag inside it to move it. The slider straightens it.
 
 const MIN_CROP = 0.1;
 
 function startCropMode() {
+  resetZoom();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
   cropRect = rotateCrop(photo.crop ?? FULL_CROP, photo.rot);
+  setCropAngle(photo.crop?.angle || 0);
   editor.classList.add('cropping');
   refresh();
 }
@@ -216,6 +392,14 @@ function startCropMode() {
 function endCropMode() {
   cropRect = null;
   editor.classList.remove('cropping');
+}
+
+function setCropAngle(a) {
+  cropAngle = Math.round(a * 10) / 10;
+  angleSlider.value = cropAngle;
+  const out = $('angle-val');
+  out.textContent = `${cropAngle > 0 ? '+' : ''}${cropAngle}°`;
+  out.classList.toggle('changed', cropAngle !== 0);
 }
 
 function layoutCrop() {
@@ -256,17 +440,28 @@ cropBox.addEventListener('pointermove', (e) => {
 });
 ['pointerup', 'pointercancel'].forEach((t) => cropBox.addEventListener(t, () => { drag = null; }));
 
+angleSlider.addEventListener('input', () => {
+  setCropAngle(Number(angleSlider.value));
+  refresh();
+});
+angleSlider.addEventListener('dblclick', () => {
+  setCropAngle(0);
+  refresh();
+});
+
 $('btn-crop').addEventListener('click', startCropMode);
 
 $('crop-auto').addEventListener('click', () => {
   if (!photo.autoCrop) { toast('No slide border found on this photo'); return; }
   cropRect = rotateCrop(photo.autoCrop, photo.rot);
-  layoutCrop();
+  setCropAngle(photo.autoCrop.angle || 0);
+  refresh();
 });
 
 $('crop-none').addEventListener('click', () => {
   cropRect = { ...FULL_CROP };
-  layoutCrop();
+  setCropAngle(0);
+  refresh();
 });
 
 $('crop-cancel').addEventListener('click', () => {
@@ -275,7 +470,8 @@ $('crop-cancel').addEventListener('click', () => {
 });
 
 $('crop-done').addEventListener('click', async () => {
-  const c = rotateCrop(cropRect, -photo.rot);
+  const { x0, y0, x1, y1 } = rotateCrop(cropRect, -photo.rot);
+  const c = cropAngle ? { x0, y0, x1, y1, angle: cropAngle } : { x0, y0, x1, y1 };
   try {
     await withBusy(() => setCrop(photo, c));
   } catch (err) {
