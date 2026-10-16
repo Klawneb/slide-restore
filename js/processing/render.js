@@ -5,6 +5,7 @@
 
 import { clamp } from './color.js';
 import { removeDustInPlace } from './dust.js';
+import { smoothGrainInPlace } from './grain.js';
 
 export const NEUTRAL_AUTO = Object.freeze({
   black: [0, 0, 0],
@@ -22,10 +23,13 @@ export const NEUTRAL_AUTO = Object.freeze({
   shadowTint: null, // [r, g, b] added to shadows, fading out by mid-grey
   shadowCalm: 0, // 0..1: less colour in near-black areas
   dust: false, // remove dust specks
+  grain: 0, // 0..1: how much to smooth film grain
+  noise: 0, // grain strength (0..255) measured at full resolution
+  noiseLong: 0, // the long side that noise was measured at
 });
 
 export const ZERO_ADJ = Object.freeze({
-  brightness: 0, contrast: 0, warmth: 0, tint: 0, saturation: 0, sharpness: 0,
+  brightness: 0, contrast: 0, warmth: 0, tint: 0, saturation: 0, sharpness: 0, grain: 0,
 });
 
 // Merge auto parameters with slider offsets into the values render() uses.
@@ -59,6 +63,11 @@ export function resolveParams(auto, adj = ZERO_ADJ) {
     shadowTint: auto.shadowTint ?? null,
     shadowCalm: auto.shadowCalm ?? 0,
     dust: !!auto.dust,
+    grain: clamp(a.grain >= 0
+      ? (auto.grain ?? 0) + (1 - (auto.grain ?? 0)) * (a.grain / 100)
+      : (auto.grain ?? 0) * (1 + a.grain / 100), 0, 1),
+    noise: auto.noise ?? 0,
+    noiseLong: auto.noiseLong ?? 0,
   };
 }
 
@@ -297,8 +306,10 @@ export function rotate(img, quarterTurns) {
 
 // Largest dust speck removed, as a fraction of the photo's long side.
 const DUST_SIZE = 0.003;
+// Grain smoothing window, as a fraction of the photo's long side.
+const GRAIN_SIZE = 0.001;
 
-// Full pipeline: colour → dust → colour smoothing → sharpen → rotate.
+// Full pipeline: colour → dust → grain → colour smoothing → sharpen → rotate.
 // longSide: the long side of the whole photo when img is only part of it
 // (zoomed-in detail), so sizes like the sharpening radius match.
 export function render(img, auto, adj, quarterTurns = 0, longSide = Math.max(img.width, img.height)) {
@@ -306,6 +317,11 @@ export function render(img, auto, adj, quarterTurns = 0, longSide = Math.max(img
   const out = applyColor(img, p);
   // Before sharpening, which would make specks stand out more.
   if (p.dust) removeDustInPlace(out, Math.max(1.5, DUST_SIZE * longSide));
+  if (p.grain > 0 && p.noiseLong > 0) {
+    // Grain averages out when the photo is shrunk (previews), so it's weaker there.
+    const scale = Math.min(1, longSide / p.noiseLong);
+    smoothGrainInPlace(out, p.grain, p.noise * scale, Math.max(1, GRAIN_SIZE * longSide));
+  }
   smoothChromaInPlace(out, Math.min(4, p.chromaRadius * longSide));
   const sigma = clamp(p.sharpRadius * longSide, 0.6, 4);
   sharpenInPlace(out, p.sharpAmount, sigma, p.sharpThreshold);

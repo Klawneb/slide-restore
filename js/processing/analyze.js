@@ -6,6 +6,7 @@
 
 import { clamp, histograms, percentile, rgbToLab } from './color.js';
 import { NEUTRAL_AUTO, buildLuts, applyColor, gaussianKernel } from './render.js';
+import { grainSigma } from './grain.js';
 
 const TARGET_MEDIAN = 0.46;
 
@@ -159,10 +160,18 @@ export function analyze(img, crop = null, fullLongSide = null) {
     p.sharpThreshold = clamp(noise * 4, 4, 20);
     // Smooth colour speckle (film grain, JPEG blocks) without touching detail.
     p.chromaRadius = clamp(1.2 + noise * 0.25, 1.2, 3) / long;
+    // Grain to smooth: none on clean scans, more as grain gets stronger.
+    // No flat areas to measure in: a rough guess, so the slider still works.
+    const grain = grainSigma(L, src.width, src.height);
+    p.noise = grain || clamp(noise * 1.5, 1.5, 4);
+    p.noiseLong = crop ? long : Math.max(img.width, img.height);
+    p.grain = grain ? clamp((grain - GRAIN_FLOOR) / GRAIN_SPAN, 0, GRAIN_MAX) : 0;
   }
 
   return p;
 }
+
+const GRAIN_FLOOR = 1, GRAIN_SPAN = 3, GRAIN_MAX = 0.6;
 
 // Strong remaining casts may be genuine (sunsets, lamplight): correct less.
 function castStrength(chroma) {

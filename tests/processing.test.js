@@ -3,6 +3,7 @@ import { analyze, lumaPlane, reblurRatio } from '../js/processing/analyze.js';
 import { render, rotate, applyColor, resolveParams, NEUTRAL_AUTO } from '../js/processing/render.js';
 import { meanLab, histograms, percentile, rgbToLab } from '../js/processing/color.js';
 import { detectCrop, cropImage, rotateCrop, transform } from '../js/processing/crop.js';
+import { grainSigma } from '../js/processing/grain.js';
 
 const W = 240, H = 160;
 
@@ -355,5 +356,60 @@ describe('dust removal', () => {
     let diff = 0;
     for (let i = 0; i < a.data.length; i++) if (Math.abs(a.data[i] - img.data[i]) > 1) diff++;
     expect(diff).toBe(0);
+  });
+});
+
+describe('grain smoothing', () => {
+  // Left half: flat grey with grain. Right half: sharp black/white stripes.
+  function grainy(seed = 1) {
+    const w = 256, h = 192, data = new Uint8ClampedArray(w * h * 4);
+    let s = seed;
+    const rnd = () => ((s = (s * 1103515245 + 12345) >>> 0) / 2 ** 32 - 0.5) * 2;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const v = x < w / 2 ? 128 + rnd() * 10 : ((x >> 2) & 1 ? 220 : 40);
+      data[i] = data[i + 1] = data[i + 2] = v; data[i + 3] = 255;
+    }
+    return { width: w, height: h, data };
+  }
+  const sd = (img, x0, x1) => {
+    let s = 0, s2 = 0, n = 0;
+    for (let y = 8; y < img.height - 8; y++) for (let x = x0; x < x1; x++) {
+      const v = img.data[(y * img.width + x) * 4 + 1]; s += v; s2 += v * v; n++;
+    }
+    return Math.sqrt(s2 / n - (s / n) ** 2);
+  };
+  const auto = { ...NEUTRAL_AUTO, noise: 5, noiseLong: 256 };
+
+  it('smooths grain on flat areas but keeps edges', () => {
+    const img = grainy();
+    const out = render(img, { ...auto, grain: 0.6 }, {});
+    expect(sd(out, 8, 120)).toBeLessThan(sd(img, 8, 120) * 0.6);
+    // Stripes keep their full contrast.
+    expect(Math.abs(sd(out, 136, 248) - sd(img, 136, 248))).toBeLessThan(3);
+  });
+
+  it('does nothing when off, and the slider can switch it off or on', () => {
+    const img = grainy();
+    const off = render(img, { ...auto, grain: 0 }, {});
+    expect(sd(off, 8, 120)).toBeCloseTo(sd(img, 8, 120), 0);
+    const down = render(img, { ...auto, grain: 0.6 }, { grain: -100 });
+    expect(sd(down, 8, 120)).toBeCloseTo(sd(img, 8, 120), 0);
+    const up = render(img, { ...auto, grain: 0 }, { grain: 100 });
+    expect(sd(up, 8, 120)).toBeLessThan(sd(img, 8, 120) * 0.6);
+  });
+
+  it('measures grain in flat areas and ignores busy pictures', () => {
+    const img = grainy();
+    const L = lumaPlane(img);
+    expect(grainSigma(L, img.width, img.height)).toBeGreaterThan(3);
+    // Stripes only: no flat areas, so no grain measured.
+    const busy = new Uint8Array(256 * 192).map((_, j) => ((j % 256) >> 2) & 1 ? 220 : 40);
+    expect(grainSigma(busy, 256, 192)).toBe(0);
+  });
+
+  it('analyze turns grain smoothing on for grainy photos only', () => {
+    expect(analyze(grainy()).grain).toBeGreaterThan(0.3);
+    expect(analyze(scene()).grain).toBe(0);
   });
 });

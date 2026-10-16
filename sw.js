@@ -3,7 +3,7 @@
 // Bump VERSION on every release: a changed sw.js is what makes installed
 // copies download the new files and switch over.
 
-const VERSION = 'v9';
+const VERSION = 'v10';
 const CACHE = `slide-restore-${VERSION}`;
 const FILES = [
   './',
@@ -21,6 +21,7 @@ const FILES = [
   'js/processing/color.js',
   'js/processing/crop.js',
   'js/processing/dust.js',
+  'js/processing/grain.js',
   'icons/icon.svg',
   'icons/icon-192.png',
   'icons/icon-512.png',

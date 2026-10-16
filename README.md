@@ -14,6 +14,8 @@ photos are never uploaded anywhere.
   If the crop is wrong, tap **Crop** and drag the corners or edges (or drag inside the box to move it), use the
   **Straighten** slider if needed, then **Done**. **Auto crop** puts the detected crop back; **Whole photo** removes it.
   **Remove dust** switches dust removal on or off.
+- **Smooth grain** softens film grain on flat areas (sky, walls, skin) while keeping edges sharp. Auto Fix sets it
+  from how grainy the scan is (busy pictures, where grain is hard to see, get none); the slider adds or removes it.
 - **Zoom**: pinch the photo (or double-tap it) to look closely; drag to move around. When you stop moving, the part
   on screen is shown at the scan's full resolution. **Zoom out** (or double-tap again) goes back.
 - Double-tap a slider to centre it again. **↺ Start again** undoes everything.
@@ -54,5 +56,8 @@ npm run crops -- out/ scan.jpg ...   # draws the detected border crop on each sc
 
 Dust removal (`dust.js`): small spots much lighter or darker than their surroundings (found by morphological
 opening/closing), only where the surroundings are smooth and the spots are sparse – so foliage and sparkle are left alone.
+
+Grain smoothing (`grain.js`): a self-guided filter on brightness, which flattens ripples about as strong as the
+grain and keeps anything stronger. Grain strength is measured in flat areas of a full-resolution patch.
 
 Note: Chrome can't open TIFF files, so scans need to be saved as JPEG (or PNG).
