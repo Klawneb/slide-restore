@@ -231,12 +231,51 @@ describe('auto crop', () => {
     }
   });
 
+  it('copes with uneven lighting, writing on the mount and a picture near one edge', () => {
+    // Picture almost touching the left edge, a wide mount on the right with
+    // blue writing that runs off the edge, lighting falling off to the right,
+    // and no dark rim along the bottom (bright sky meets the mount directly).
+    const PX = 4, PY = 50;
+    const pic = scene();
+    const data = new Uint8ClampedArray(MW * MH * 4);
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+      const px = x - PX, py = y - PY;
+      const light = 1 - 0.6 * (x / MW) * (y / MH); // darker towards bottom right
+      let c;
+      if (px >= 0 && py >= 0 && px < W && py < H) {
+        const inRim = px < RIM || py < RIM || px >= W - RIM; // no rim along the bottom
+        c = inRim ? [30, 26, 24] : py >= H - 12 ? [250, 250, 252] : Array.from(pic.data.subarray((py * W + px) * 4, (py * W + px) * 4 + 3));
+      } else if (x > 268 && (Math.floor(y / 14) % 3 === 0) && y > 30 && y < 220) {
+        c = [60, 140, 205].map((v) => v * light); // writing
+      } else {
+        c = [200, 198, 194].map((v) => v * light);
+      }
+      data.set([...c, 255], (y * MW + x) * 4);
+    }
+    const c = detectCrop({ width: MW, height: MH, data });
+    expect(c).not.toBeNull();
+    const left = c.x0 * MW - PX, top = c.y0 * MH - PY;
+    const right = (PX + W) - c.x1 * MW, bottom = (PY + H) - c.y1 * MH;
+    for (const inset of [left, top, right]) {
+      expect(inset).toBeGreaterThanOrEqual(RIM - 0.5);
+      expect(inset).toBeLessThan(RIM + 6);
+    }
+    expect(bottom).toBeGreaterThanOrEqual(0);
+    expect(bottom).toBeLessThan(8);
+  });
+
   it('leaves photos without a border alone', () => {
     expect(detectCrop(scene())).toBeNull();
     // Plain sky along one edge is picture, not a border.
     const sky = mapPixels(scene(), (r, g, b) => [r, g, b]);
     for (let i = 0; i < W * 40 * 4; i += 4) sky.data.set([150, 190, 235], i);
     expect(detectCrop(sky)).toBeNull();
+    // Deep, smooth shadow round the edges is picture too.
+    const shady = mapPixels(scene(), (r, g, b) => [r, g, b]);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (x < 30 || y < 25 || x >= W - 30) shady.data.set([45, 36, 26], (y * W + x) * 4);
+    }
+    expect(detectCrop(shady)).toBeNull();
   });
 
   it('crops images and maps crops through rotation', () => {

@@ -39,7 +39,7 @@ npm run crops -- out/ scan.jpg ...   # draws the detected border crop on each sc
 ```
 
 ### How Auto Fix works (`js/processing/`)
-0. Border crop (`crop.js`) – if the scan's edges show an even-coloured mount, work in from each side past the mount and the film's dark rim. Colour/tone analysis then runs on the picture only.
+0. Border crop (`crop.js`) – if at least two edges of the scan show a light, smooth mount, work in from each side (in three sections, so tilted slides work) until the line stops being mount – the film's dark rim, or the picture itself – then skip the rim. Copes with uneven lighting, writing on the mount and pictures that nearly touch an edge. Colour/tone analysis then runs on the picture only.
 1. Per-channel levels stretch – removes fading and most colour casts (damped when a channel would need an extreme stretch, e.g. real sunsets).
 2. Mid-tone neutralisation – greyish mid-tones pulled towards true grey, with strength reduced for strong (probably genuine) casts.
 3. Brightness – gamma moves the median brightness towards a pleasant mid-tone.
