@@ -100,7 +100,7 @@ describe('tone', () => {
     const before = percentile(histograms(dark).l, 0.5);
     const after = percentile(histograms(render(dark, analyze(dark))).l, 0.5);
     expect(before).toBeLessThan(70);
-    expect(after).toBeGreaterThan(95);
+    expect(after).toBeGreaterThan(85);
     expect(after).toBeLessThan(150);
   });
 
@@ -127,7 +127,7 @@ describe('sharpening', () => {
   it('detects blur and restores edge detail', () => {
     const blurred = boxBlur(scene(), 2);
     const auto = analyze(blurred);
-    expect(auto.sharpAmount).toBeGreaterThan(0.9);
+    expect(auto.sharpAmount).toBeGreaterThan(0.5);
     const ratio = (img) => reblurRatio(lumaPlane(img), img.width, img.height);
     const noSharpen = render(blurred, auto, { sharpness: -100 });
     const sharpened = render(blurred, auto);
@@ -135,7 +135,46 @@ describe('sharpening', () => {
   });
 
   it('sharpens a crisp image only lightly', () => {
-    expect(analyze(scene()).sharpAmount).toBeLessThan(0.7);
+    expect(analyze(scene()).sharpAmount).toBeLessThan(0.35);
+  });
+});
+
+describe('noise', () => {
+  // Deterministic pseudo-random colour speckle, like film grain / JPEG noise.
+  function speckled() {
+    let seed = 1;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+    const img = scene();
+    for (let i = 0; i < img.data.length; i += 4) {
+      img.data[i] += rand() * 40; img.data[i + 2] += rand() * 40;
+    }
+    return img;
+  }
+  // Average colour difference between neighbouring pixels in the grey half.
+  function chromaSpeckle(img) {
+    let s = 0, n = 0;
+    for (let y = 0; y < img.height / 2; y++) for (let x = 1; x < img.width; x++) {
+      const i = (y * img.width + x) * 4, j = i - 4;
+      const c = (k) => img.data[k] - img.data[k + 1];
+      s += Math.abs(c(i) - c(j)); n++;
+    }
+    return s / n;
+  }
+
+  it('smooths colour speckle instead of amplifying it', () => {
+    const img = speckled();
+    const fixed = render(img, analyze(img));
+    expect(chromaSpeckle(fixed)).toBeLessThan(chromaSpeckle(img) * 0.6);
+  });
+
+  it('does not sharpen grain in deep shadows', () => {
+    const img = speckled();
+    const auto = { ...analyze(img), chromaRadius: 0 };
+    const dark = mapPixels(img, (r, g, b) => [r * 0.12, g * 0.12, b * 0.12]);
+    const a = render(dark, auto, { sharpness: -100 }), b = render(dark, auto, { sharpness: 100 });
+    let diff = 0;
+    for (let i = 0; i < a.data.length; i++) diff += Math.abs(a.data[i] - b.data[i]);
+    expect(diff / a.data.length).toBeLessThan(0.5);
   });
 });
 

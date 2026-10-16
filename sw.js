@@ -2,7 +2,7 @@
 // background so updates appear the next time the app is opened.
 // Bump VERSION whenever files are added or renamed.
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = `slide-restore-${VERSION}`;
 const FILES = [
   './',

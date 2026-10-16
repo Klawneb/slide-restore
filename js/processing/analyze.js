@@ -37,25 +37,31 @@ export function analyze(img, crop = null, fullLongSide = null) {
     }
   }
 
+  // 1b. Neutralise highlights: bright greyish areas (sand, clouds, walls)
+  // carry a cast that mid-tone gamma barely touches, so adjust white points.
+  {
+    const m = greyishMean(img, p, step, 0.6, 0.97);
+    if (m) {
+      const [, A, B] = rgbToLab(m[0], m[1], m[2]);
+      const strength = castStrength(Math.hypot(A, B));
+      const target = (m[0] + m[1] + m[2]) / 3;
+      const gains = m.map((v) => 1 + (target / v - 1) * strength);
+      // Only ever boost the weaker channels: dimming the strongest one would
+      // stop it reaching full brightness and tint every highlight.
+      const minGain = Math.min(...gains);
+      for (let c = 0; c < 3; c++) {
+        const gain = clamp(gains[c] / minGain, 1, 1.3);
+        p.white[c] = p.black[c] + (p.white[c] - p.black[c]) / gain;
+      }
+    }
+  }
+
   // 2. Neutralise mid-tones: the greyish mid-brightness pixels should be grey.
   {
-    const [lr, lg, lb] = buildLuts(p);
-    let sr = 0, sg = 0, sb = 0, sw = 0;
-    const d = img.data;
-    for (let i = 0; i < d.length; i += 4 * step) {
-      const r = lr[d[i]], g = lg[d[i + 1]], b = lb[d[i + 2]];
-      const l = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (l < 0.18 || l > 0.88) continue;
-      const s = Math.max(r, g, b) - Math.min(r, g, b);
-      const wgt = 1 / (1 + (s / 0.1) * (s / 0.1));
-      sr += r * wgt; sg += g * wgt; sb += b * wgt; sw += wgt;
-    }
-    if (sw > 0) {
-      const m = [sr / sw, sg / sw, sb / sw];
+    const m = greyishMean(img, p, step, 0.18, 0.88);
+    if (m) {
       const [, A, B] = rgbToLab(m[0], m[1], m[2]);
-      const chroma = Math.hypot(A, B);
-      // Strong remaining casts may be genuine (sunsets, lamplight): correct less.
-      const strength = chroma <= 12 ? 1 : clamp(1 - (chroma - 12) / 40, 0.4, 1);
+      const strength = castStrength(Math.hypot(A, B));
       const target = (m[0] + m[1] + m[2]) / 3;
       for (let c = 0; c < 3; c++) {
         if (m[c] <= 0.01 || m[c] >= 0.99) continue;
@@ -69,8 +75,10 @@ export function analyze(img, crop = null, fullLongSide = null) {
   {
     const median = percentile(lumaHist(img, p, step), 0.5) / 255;
     if (median > 0.02 && median < 0.98) {
+      // Gentle: high-contrast scenes (deep shadows, bright sky) shouldn't be
+      // forced to mid-grey, and lifting shadows hard exposes grain.
       const g = Math.log(TARGET_MEDIAN) / Math.log(median);
-      p.bright = clamp(Math.pow(g, 0.8), 0.5, 1.8);
+      p.bright = clamp(Math.pow(g, 0.6), 0.72, 1.5);
     }
   }
 
@@ -103,14 +111,40 @@ export function analyze(img, crop = null, fullLongSide = null) {
     const blurriness = reblurRatio(L, src.width, src.height); // ~0.15 crisp … ~0.7+ blurry
     const noise = noiseSigma(L, src.width, src.height);
     const u = clamp((blurriness - 0.25) / 0.45, 0, 1);
-    p.sharpAmount = 0.35 + u * 1.25;
-    const sigmaPx = 1 + u * 2;
+    // Grainy or heavily compressed scans get less sharpening, not more noise.
+    const calm = clamp(1 - (noise - 2) / 6, 0.35, 1);
+    p.sharpAmount = (0.2 + u * 0.7) * calm;
+    const sigmaPx = 1 + u * 1.5;
     const long = fullLongSide ?? Math.max(img.width, img.height);
     p.sharpRadius = sigmaPx / long;
-    p.sharpThreshold = clamp(noise * 2.5, 2, 16);
+    p.sharpThreshold = clamp(noise * 4, 4, 20);
+    // Smooth colour speckle (film grain, JPEG blocks) without touching detail.
+    p.chromaRadius = clamp(1.2 + noise * 0.25, 1.2, 3) / long;
   }
 
   return p;
+}
+
+// Strong remaining casts may be genuine (sunsets, lamplight): correct less.
+function castStrength(chroma) {
+  return chroma <= 18 ? 1 : clamp(1 - (chroma - 18) / 50, 0.5, 1);
+}
+
+// Average colour (0..1) of greyish pixels within a brightness range, after the
+// current settings. Less colourful pixels count more. Null if none qualify.
+function greyishMean(img, p, step, lo, hi) {
+  const [lr, lg, lb] = buildLuts(p);
+  let sr = 0, sg = 0, sb = 0, sw = 0;
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4 * step) {
+    const r = lr[d[i]], g = lg[d[i + 1]], b = lb[d[i + 2]];
+    const l = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (l < lo || l > hi) continue;
+    const s = Math.max(r, g, b) - Math.min(r, g, b);
+    const wgt = 1 / (1 + (s / 0.1) * (s / 0.1));
+    sr += r * wgt; sg += g * wgt; sb += b * wgt; sw += wgt;
+  }
+  return sw > 0 ? [sr / sw, sg / sw, sb / sw] : null;
 }
 
 function cloneAuto(a) {

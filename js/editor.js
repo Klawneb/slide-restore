@@ -21,7 +21,7 @@ let onClose = null;
 function previewSize() {
   const r = frame.getBoundingClientRect();
   const longest = Math.max(r.width, r.height, 800) * Math.min(devicePixelRatio || 1, 2);
-  return Math.round(Math.min(2000, longest));
+  return Math.round(Math.min(1600, longest));
 }
 
 const refresh = latestOnly(async () => {
