@@ -51,7 +51,7 @@ function makeTile(it) {
   tile.innerHTML = '<div class="spinner"></div><span class="badge"></span>';
   const rm = document.createElement('button');
   rm.className = 'remove';
-  rm.textContent = '✕';
+  rm.innerHTML = '<svg class="i"><use href="#i-close"/></svg>';
   rm.setAttribute('aria-label', 'Remove from list');
   rm.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -87,8 +87,8 @@ function setBadge(it) {
   const p = it.photo;
   b.className = 'badge';
   if (it.error) { b.textContent = "Can't open"; b.classList.add('error'); it.tile.querySelector('.spinner')?.remove(); }
-  else if (p.saved) { b.textContent = 'Saved ✓'; b.classList.add('saved'); }
-  else if (isEdited(p)) { b.textContent = 'Fixed ✨'; b.classList.add('fixed'); }
+  else if (p.saved) { b.textContent = 'Saved'; b.classList.add('saved'); }
+  else if (isEdited(p)) { b.textContent = 'Fixed'; b.classList.add('fixed'); }
   else b.textContent = 'Original';
 }
 
@@ -129,12 +129,12 @@ $('batch-auto').addEventListener('click', async () => {
   }
   progress(null);
   lock(false);
-  toast(`✨ Fixed ${list.length} photo${list.length > 1 ? 's' : ''}`);
+  toast(`Fixed ${list.length} photo${list.length > 1 ? 's' : ''}`);
 });
 
 async function exportAll(label, each) {
   const list = usable().filter((i) => !i.photo.saved);
-  if (!list.length) { toast('All photos are already saved ✓'); return; }
+  if (!list.length) { toast('All photos are already saved'); return; }
   lock(true);
   let ok = 0;
   try {
@@ -162,7 +162,7 @@ $('batch-save').addEventListener('click', async () => {
     setBadge(it);
     await sleep(350); // give the browser a moment between downloads
   });
-  if (ok) toast(`Saved ${ok} photo${ok > 1 ? 's' : ''} ✓  (in your Downloads)`);
+  if (ok) toast(`Saved ${ok} photo${ok > 1 ? 's' : ''} to your Downloads`);
 });
 
 if (canShareFiles()) {

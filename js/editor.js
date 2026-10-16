@@ -65,10 +65,18 @@ function layoutOverlay() {
 }
 
 function syncControls() {
-  sliders.forEach((s) => { s.value = photo.adj[s.dataset.adj]; });
+  sliders.forEach((s) => { s.value = photo.adj[s.dataset.adj]; showValue(s); });
   autoBtn.classList.toggle('on', photo.useAuto);
-  autoBtn.classList.toggle('pulse', !photo.useAuto);
-  autoBtn.textContent = photo.useAuto ? '✨ Auto Fix is on' : '✨ Auto Fix';
+  autoBtn.querySelector('use').setAttribute('href', photo.useAuto ? '#i-check' : '#i-auto');
+  autoBtn.querySelector('.auto-label').textContent = photo.useAuto ? 'Auto Fix is on' : 'Auto Fix';
+}
+
+// The number beside each slider name: 0 in the middle, +/- either side.
+function showValue(slider) {
+  const out = slider.closest('.slider').querySelector('.s-val');
+  const v = Number(slider.value);
+  out.textContent = v > 0 ? `+${v}` : String(v);
+  out.classList.toggle('changed', v !== 0);
 }
 
 export async function openEditor(p, { inBatch = false, onBack } = {}) {
@@ -77,6 +85,7 @@ export async function openEditor(p, { inBatch = false, onBack } = {}) {
   $('btn-done').hidden = !inBatch;
   $('btn-save').hidden = inBatch;
   $('btn-share').hidden = inBatch || !canShareFiles();
+  $('photo-name').textContent = photo.name;
   endCropMode();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
@@ -118,7 +127,7 @@ autoBtn.addEventListener('click', async () => {
   await withBusy(() => setCrop(photo, photo.autoCrop));
   syncControls();
   changed();
-  toast(photo.autoCrop ? '✨ Auto Fix applied – slide border cropped off' : '✨ Auto Fix applied');
+  toast(photo.autoCrop ? 'Auto Fix applied, slide border cropped off' : 'Auto Fix applied');
 });
 
 // Shows the spinner only if the work takes a noticeable time.
@@ -130,12 +139,14 @@ async function withBusy(fn) {
 sliders.forEach((s) => {
   s.addEventListener('input', () => {
     photo.adj[s.dataset.adj] = Number(s.value);
+    showValue(s);
     changed();
   });
   // Double-tap a slider to centre it.
   s.addEventListener('dblclick', () => {
     s.value = 0;
     photo.adj[s.dataset.adj] = 0;
+    showValue(s);
     changed();
   });
 });
@@ -258,6 +269,11 @@ $('crop-none').addEventListener('click', () => {
   layoutCrop();
 });
 
+$('crop-cancel').addEventListener('click', () => {
+  endCropMode();
+  refresh();
+});
+
 $('crop-done').addEventListener('click', async () => {
   const c = rotateCrop(cropRect, -photo.rot);
   try {
@@ -284,7 +300,7 @@ $('btn-save').addEventListener('click', async () => {
     const blob = await makeJpeg();
     saveBlob(blob, restoredName(photo.name));
     photo.saved = true;
-    toast('Saved ✓  (in your Downloads)');
+    toast('Saved to your Downloads');
   } catch (err) {
     console.error(err);
     toast(friendlyError(err));

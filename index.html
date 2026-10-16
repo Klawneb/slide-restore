@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Slide Restore</title>
   <meta name="description" content="Fix faded, blurry and colour-cast photo slides.">
-  <meta name="theme-color" content="#17324d">
+  <meta name="theme-color" content="#131518">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -13,23 +13,48 @@
 </head>
 <body>
 
+  <!-- Line icons, used with <svg class="i"><use href="#i-name"/></svg> -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+      <symbol id="i-auto" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 2v20"/></symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/></symbol>
+      <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+      <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 11a8 8 0 1 1 2.3 5.7"/><path d="M4 4v7h7"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 19h16"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-photo" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></symbol>
+      <symbol id="i-photos" viewBox="0 0 24 24"><rect x="7" y="3" width="14" height="14" rx="2"/><path d="M3 7v12a2 2 0 0 0 2 2h12"/><path d="M21 13l-4-4-7 7"/></symbol>
+      <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
+    </defs>
+  </svg>
+
   <!-- HOME -->
   <section id="home" class="screen active">
     <header class="home-head">
       <img src="icons/icon.svg" alt="" class="home-logo">
       <h1>Slide Restore</h1>
-      <p>Bring old slides back to life.</p>
+      <p>Fix faded colours, colour casts, brightness and blur in scanned slides.</p>
     </header>
     <div class="home-buttons">
-      <button id="btn-one" class="big-choice">
-        <span class="emoji">📷</span>
-        <span class="label">Fix a Photo</span>
-        <span class="hint">Choose one photo to fix</span>
+      <button id="btn-one" class="choice">
+        <span class="choice-icon"><svg class="i"><use href="#i-photo"/></svg></span>
+        <span class="choice-text">
+          <span class="label">Fix a photo</span>
+          <span class="hint">Choose one photo and fine-tune it</span>
+        </span>
       </button>
-      <button id="btn-many" class="big-choice">
-        <span class="emoji">🗂️</span>
-        <span class="label">Fix Many Photos</span>
-        <span class="hint">Fix a whole batch at once</span>
+      <button id="btn-many" class="choice">
+        <span class="choice-icon"><svg class="i"><use href="#i-photos"/></svg></span>
+        <span class="choice-text">
+          <span class="label">Fix many photos</span>
+          <span class="hint">Fix and save a whole batch at once</span>
+        </span>
       </button>
     </div>
   </section>
@@ -50,70 +75,87 @@
           <span class="h h-bl" data-h="bl"></span><span class="h h-br" data-h="br"></span>
         </div>
       </div>
-      <div class="stage-buttons">
-        <button id="btn-back" class="pill">← Back</button>
-        <span class="spacer"></span>
-        <button id="btn-hold" class="pill">👁 Hold to see original</button>
-        <button id="btn-compare" class="pill" aria-pressed="false">↔ Compare</button>
-        <button id="btn-crop" class="pill">✂️ Crop</button>
-        <button id="btn-rotate" class="pill">⟳ Rotate</button>
-      </div>
-      <div class="stage-buttons crop-buttons">
-        <span class="crop-help">Drag the corners to choose what to keep</span>
-        <span class="spacer"></span>
-        <button id="crop-auto" class="pill">✨ Auto crop</button>
-        <button id="crop-none" class="pill">⬜ Whole photo</button>
-        <button id="crop-done" class="pill crop-done">✓ Done</button>
-      </div>
     </div>
 
     <aside class="panel">
-      <button id="btn-auto" class="auto-btn">✨ Auto Fix</button>
+      <!-- Normal editing -->
+      <div class="panel-main">
+        <div class="panel-head">
+          <button id="btn-back" class="ghost"><svg class="i"><use href="#i-back"/></svg>Back</button>
+          <span class="photo-name" id="photo-name"></span>
+        </div>
 
-      <div class="sliders" id="sliders">
-        <label class="slider"><span class="s-name">☀️ Brightness</span>
-          <input type="range" min="-100" max="100" value="0" data-adj="brightness">
-          <span class="s-ends"><span>Darker</span><span>Lighter</span></span></label>
-        <label class="slider"><span class="s-name">◐ Contrast</span>
-          <input type="range" min="-100" max="100" value="0" data-adj="contrast">
-          <span class="s-ends"><span>Softer</span><span>Punchier</span></span></label>
-        <label class="slider"><span class="s-name">🌡️ Warmth</span>
-          <input type="range" min="-100" max="100" value="0" data-adj="warmth" class="track-warm">
-          <span class="s-ends"><span>More blue</span><span>More yellow</span></span></label>
-        <label class="slider"><span class="s-name">🎨 Tint</span>
-          <input type="range" min="-100" max="100" value="0" data-adj="tint" class="track-tint">
-          <span class="s-ends"><span>More green</span><span>More pink</span></span></label>
-        <label class="slider"><span class="s-name">🌈 Colour strength</span>
-          <input type="range" min="-100" max="100" value="0" data-adj="saturation">
-          <span class="s-ends"><span>Less colour</span><span>More colour</span></span></label>
-        <label class="slider"><span class="s-name">🔍 Sharpness</span>
-          <input type="range" min="-100" max="100" value="0" data-adj="sharpness">
-          <span class="s-ends"><span>Softer</span><span>Sharper</span></span></label>
+        <button id="btn-auto" class="auto-btn">
+          <svg class="i"><use href="#i-auto"/></svg><span class="auto-label">Auto Fix</span>
+        </button>
+
+        <div class="tools">
+          <button id="btn-hold" class="tool"><svg class="i"><use href="#i-eye"/></svg><span>Hold for<br>original</span></button>
+          <button id="btn-compare" class="tool" aria-pressed="false"><svg class="i"><use href="#i-compare"/></svg><span>Compare</span></button>
+          <button id="btn-crop" class="tool"><svg class="i"><use href="#i-crop"/></svg><span>Crop</span></button>
+          <button id="btn-rotate" class="tool"><svg class="i"><use href="#i-rotate"/></svg><span>Rotate</span></button>
+        </div>
+
+        <div class="section-head">
+          <h3 class="section-title">Adjust</h3>
+          <button id="btn-reset" class="ghost small"><svg class="i"><use href="#i-reset"/></svg>Start again</button>
+        </div>
+        <div class="sliders" id="sliders">
+          <label class="slider"><span class="s-head"><span class="s-name">Brightness</span><output class="s-val"></output></span>
+            <input type="range" min="-100" max="100" value="0" data-adj="brightness">
+            <span class="s-ends"><span>Darker</span><span>Lighter</span></span></label>
+          <label class="slider"><span class="s-head"><span class="s-name">Contrast</span><output class="s-val"></output></span>
+            <input type="range" min="-100" max="100" value="0" data-adj="contrast">
+            <span class="s-ends"><span>Softer</span><span>Punchier</span></span></label>
+          <label class="slider"><span class="s-head"><span class="s-name">Warmth</span><output class="s-val"></output></span>
+            <input type="range" min="-100" max="100" value="0" data-adj="warmth" class="track-warm">
+            <span class="s-ends"><span>More blue</span><span>More yellow</span></span></label>
+          <label class="slider"><span class="s-head"><span class="s-name">Tint</span><output class="s-val"></output></span>
+            <input type="range" min="-100" max="100" value="0" data-adj="tint" class="track-tint">
+            <span class="s-ends"><span>More green</span><span>More pink</span></span></label>
+          <label class="slider"><span class="s-head"><span class="s-name">Colour strength</span><output class="s-val"></output></span>
+            <input type="range" min="-100" max="100" value="0" data-adj="saturation">
+            <span class="s-ends"><span>Less colour</span><span>More colour</span></span></label>
+          <label class="slider"><span class="s-head"><span class="s-name">Sharpness</span><output class="s-val"></output></span>
+            <input type="range" min="-100" max="100" value="0" data-adj="sharpness">
+            <span class="s-ends"><span>Softer</span><span>Sharper</span></span></label>
+        </div>
+
+        <div class="panel-actions">
+          <button id="btn-share" class="secondary" hidden><svg class="i"><use href="#i-share"/></svg>Share</button>
+          <button id="btn-save" class="primary"><svg class="i"><use href="#i-save"/></svg>Save</button>
+        </div>
+        <button id="btn-done" class="primary wide" hidden><svg class="i"><use href="#i-check"/></svg>Done – back to all photos</button>
       </div>
 
-      <div class="panel-actions">
-        <button id="btn-reset" class="secondary">↺ Start again</button>
-        <button id="btn-share" class="secondary" hidden>📤 Share</button>
-        <button id="btn-save" class="primary">💾 Save</button>
+      <!-- Cropping -->
+      <div class="panel-crop">
+        <div class="panel-head"><h2>Crop</h2></div>
+        <p class="crop-help">Drag the corners or edges of the box to choose what to keep. Drag inside the box to move it.</p>
+        <button id="crop-auto" class="secondary wide"><svg class="i"><use href="#i-auto"/></svg>Auto crop</button>
+        <button id="crop-none" class="secondary wide"><svg class="i"><use href="#i-full"/></svg>Whole photo</button>
+        <div class="panel-actions">
+          <button id="crop-cancel" class="secondary">Cancel</button>
+          <button id="crop-done" class="primary"><svg class="i"><use href="#i-check"/></svg>Done</button>
+        </div>
       </div>
-      <button id="btn-done" class="primary" hidden>✓ Done – back to all photos</button>
     </aside>
   </section>
 
   <!-- BATCH -->
   <section id="batch" class="screen">
     <header class="batch-head">
-      <button id="batch-back" class="pill">← Home</button>
+      <button id="batch-back" class="ghost"><svg class="i"><use href="#i-back"/></svg>Home</button>
       <h2 id="batch-title">Your photos</h2>
-      <button id="batch-add" class="pill">＋ Add more</button>
+      <button id="batch-add" class="ghost"><svg class="i"><use href="#i-plus"/></svg>Add more</button>
     </header>
-    <p class="batch-help">Tap <b>Auto Fix All</b>, then <b>Save All</b>. Tap any photo to fine-tune it.</p>
+    <p class="batch-help">Tap <b>Auto Fix all</b>, then <b>Save all</b>. Tap a photo to fine-tune it.</p>
     <div class="progress" id="progress" hidden><div class="bar" id="progress-bar"></div><span id="progress-text"></span></div>
     <div class="grid" id="grid"></div>
     <footer class="batch-actions">
-      <button id="batch-auto" class="auto-btn">✨ Auto Fix All</button>
-      <button id="batch-share" class="secondary" hidden>📤 Share All</button>
-      <button id="batch-save" class="primary">💾 Save All</button>
+      <button id="batch-auto" class="auto-btn"><svg class="i"><use href="#i-auto"/></svg>Auto Fix all</button>
+      <button id="batch-share" class="secondary" hidden><svg class="i"><use href="#i-share"/></svg>Share all</button>
+      <button id="batch-save" class="primary"><svg class="i"><use href="#i-save"/></svg>Save all</button>
     </footer>
   </section>
 
