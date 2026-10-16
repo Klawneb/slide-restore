@@ -55,6 +55,8 @@ function layoutOverlay() {
   splitLine.style.top = `${a.top - f.top}px`;
   splitLine.style.bottom = 'auto';
   splitLine.style.height = `${a.height}px`;
+  Object.assign($('tag-before').style, { left: `${a.left - f.left}px`, top: `${a.top - f.top}px` });
+  Object.assign($('tag-after').style, { left: `${a.right - f.left}px`, top: `${a.top - f.top}px`, transform: 'translateX(-100%)' });
 }
 
 function syncControls() {
