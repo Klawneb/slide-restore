@@ -1,6 +1,6 @@
 // Batch screen: many photos, Auto Fix All, Save All.
 
-import { newPhoto, prepare, renderPreview, forget, exportJpeg, isEdited } from './engine.js';
+import { newPhoto, prepare, renderPreview, forget, exportJpeg, isEdited, setCrop } from './engine.js';
 import { restoredName, saveBlob, canShareFiles, shareFiles, toast, friendlyError, sleep } from './io.js';
 
 const $ = (id) => document.getElementById(id);
@@ -123,6 +123,7 @@ $('batch-auto').addEventListener('click', async () => {
     if (!it.photo.useAuto) {
       it.photo.useAuto = true;
       it.photo.saved = false;
+      try { await setCrop(it.photo, it.photo.autoCrop); } catch (err) { console.error(err); }
     }
     await drawThumb(it);
   }

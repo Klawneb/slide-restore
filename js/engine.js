@@ -1,6 +1,7 @@
 // Talks to the processing worker and holds per-photo state helpers.
 
 import { NEUTRAL_AUTO, ZERO_ADJ, rotate } from './processing/render.js';
+import { cropImage, isFullCrop } from './processing/crop.js';
 
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 const pending = new Map();
@@ -28,7 +29,9 @@ export function newPhoto(file) {
   return {
     file,
     name: file.name || 'photo.jpg',
-    auto: null,       // computed Auto Fix settings
+    autos: {},        // Auto Fix settings, per crop (see cropKey)
+    autoCrop: undefined, // detected slide-mount crop; null if none, undefined until looked for
+    crop: null,       // current crop rectangle (fractions of the unrotated photo), null = whole
     useAuto: false,   // whether Auto Fix is switched on
     adj: { ...ZERO_ADJ },
     rot: 0,
@@ -36,28 +39,55 @@ export function newPhoto(file) {
   };
 }
 
+const cropKey = (c) => (isFullCrop(c) ? 'full' : [c.x0, c.y0, c.x1, c.y1].map((v) => v.toFixed(4)).join(','));
+
+export const autoParams = (photo) => photo.autos[cropKey(photo.crop)];
+
 // Settings the sliders are relative to: Auto Fix if on, otherwise "no change".
 export function baseParams(photo) {
-  if (photo.useAuto) return photo.auto;
-  return { ...NEUTRAL_AUTO, sharpRadius: photo.auto.sharpRadius, sharpThreshold: photo.auto.sharpThreshold };
+  const auto = autoParams(photo);
+  if (photo.useAuto) return auto;
+  return { ...NEUTRAL_AUTO, sharpRadius: auto.sharpRadius, sharpThreshold: auto.sharpThreshold };
 }
 
 export function isEdited(photo) {
-  return photo.useAuto || photo.rot % 4 !== 0 || Object.values(photo.adj).some((v) => v !== 0);
+  return photo.useAuto || photo.rot % 4 !== 0 || !isFullCrop(photo.crop)
+    || Object.values(photo.adj).some((v) => v !== 0);
 }
 
 // Decode and analyse a photo at a given preview size. Returns a handle.
+// Auto Fix settings are worked out for the current crop and the auto crop,
+// so switching Auto Fix on later is instant.
 export async function prepare(photo, previewMax) {
   const key = keySeq++;
-  const r = await call('prepare', { key, file: photo.file, previewMax, auto: photo.auto });
-  photo.auto = r.auto;
+  const detect = photo.autoCrop === undefined;
+  const want = new Map();
+  for (const c of [photo.crop, detect ? 'auto' : photo.autoCrop]) {
+    const k = c === 'auto' ? 'auto' : cropKey(c);
+    if (!photo.autos[k]) want.set(k, c);
+  }
+  const r = await call('prepare', { key, file: photo.file, previewMax, detect, crops: [...want.values()] });
+  if (detect) photo.autoCrop = r.autoCrop ?? null;
+  for (const { crop, auto } of r.autos) photo.autos[cropKey(crop)] = auto;
   photo.fullWidth = r.fullWidth;
   photo.fullHeight = r.fullHeight;
   return { key, original: r.original };
 }
 
+// Change the crop, working out Auto Fix settings for it if needed.
+export async function setCrop(photo, crop) {
+  photo.crop = isFullCrop(crop) ? null : crop;
+  const k = cropKey(photo.crop);
+  if (!photo.autos[k]) photo.autos[k] = await call('analyze', { file: photo.file, crop: photo.crop });
+}
+
 export function renderPreview(handle, photo) {
-  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot });
+  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop });
+}
+
+// The whole photo (ignoring the crop), for the crop screen.
+export function renderUncropped(handle, photo) {
+  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: null });
 }
 
 export function forget(handle) {
@@ -65,11 +95,11 @@ export function forget(handle) {
 }
 
 export function exportJpeg(photo, quality = 0.95) {
-  return call('export', { file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, quality });
+  return call('export', { file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, quality });
 }
 
-export function rotatedOriginal(original, rot) {
-  const r = rotate(original, rot);
+export function rotatedOriginal(original, rot, crop = null) {
+  const r = rotate(cropImage(original, crop), rot);
   return r === original ? original : new ImageData(r.data, r.width, r.height);
 }
 

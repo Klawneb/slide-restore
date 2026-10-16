@@ -7,6 +7,7 @@ import { basename, join } from 'node:path';
 import jpeg from 'jpeg-js';
 import { analyze } from '../js/processing/analyze.js';
 import { render } from '../js/processing/render.js';
+import { detectCrop, cropImage } from '../js/processing/crop.js';
 
 const [outDir, ...files] = process.argv.slice(2);
 mkdirSync(outDir, { recursive: true });
@@ -52,7 +53,10 @@ const save = (img, path) => writeFileSync(path, jpeg.encode({ ...img, data: Buff
 
 for (const f of files) {
   const raw = jpeg.decode(readFileSync(f), { useTArray: true, formatAsRGBA: true });
-  const full = { width: raw.width, height: raw.height, data: new Uint8ClampedArray(raw.data.buffer) };
+  const scan = { width: raw.width, height: raw.height, data: new Uint8ClampedArray(raw.data.buffer) };
+  // Crop off any slide mount first, as Auto Fix does.
+  const border = detectCrop(resize(scan, 1024));
+  const full = cropImage(scan, border);
   const small = resize(full, 1024);
   const cw = Math.min(full.width, 768), ch = Math.min(full.height, 768);
   const c = crop(full, (full.width - cw) >> 1, (full.height - ch) >> 1, cw, ch);

@@ -109,6 +109,44 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 
 .stage-buttons { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* Crop mode */
+.crop-buttons, .crop-box { display: none; }
+#editor.cropping .stage-buttons { display: none; }
+#editor.cropping .crop-buttons { display: flex; }
+#editor.cropping .frame { overflow: hidden; }
+#editor.cropping .panel { opacity: .35; pointer-events: none; }
+#editor.cropping .crop-box {
+  display: block; position: absolute; touch-action: none; cursor: move;
+  outline: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0,0,0,.62);
+  background:
+    linear-gradient(90deg, transparent calc(33.3% - 1px), rgba(255,255,255,.35) 33.3%, transparent calc(33.3% + 1px),
+      transparent calc(66.6% - 1px), rgba(255,255,255,.35) 66.6%, transparent calc(66.6% + 1px)),
+    linear-gradient(180deg, transparent calc(33.3% - 1px), rgba(255,255,255,.35) 33.3%, transparent calc(33.3% + 1px),
+      transparent calc(66.6% - 1px), rgba(255,255,255,.35) 66.6%, transparent calc(66.6% + 1px));
+}
+.crop-box .h { position: absolute; width: 60px; height: 60px; transform: translate(-50%, -50%); }
+.crop-box .h::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 26px; height: 26px; margin: -13px 0 0 -13px;
+  background: #fff; border: 3px solid var(--gold); border-radius: 50%;
+  box-shadow: 0 1px 6px rgba(0,0,0,.6);
+}
+.crop-box .h-t, .crop-box .h-b { left: 50%; width: 30%; }
+.crop-box .h-l, .crop-box .h-r { top: 50%; height: 30%; }
+.crop-box .h-t, .crop-box .h-tl, .crop-box .h-tr { top: 0; }
+.crop-box .h-b, .crop-box .h-bl, .crop-box .h-br { top: 100%; }
+.crop-box .h-l, .crop-box .h-tl, .crop-box .h-bl { left: 0; }
+.crop-box .h-r, .crop-box .h-tr, .crop-box .h-br { left: 100%; }
+.crop-box .h-t, .crop-box .h-b { cursor: ns-resize; }
+.crop-box .h-l, .crop-box .h-r { cursor: ew-resize; }
+.crop-box .h-tl, .crop-box .h-br { cursor: nwse-resize; }
+.crop-box .h-tr, .crop-box .h-bl { cursor: nesw-resize; }
+.crop-box .h-t::after, .crop-box .h-b::after { width: 44px; height: 12px; margin: -6px 0 0 -22px; border-radius: 6px; }
+.crop-box .h-l::after, .crop-box .h-r::after { width: 12px; height: 44px; margin: -22px 0 0 -6px; border-radius: 6px; }
+.crop-help { color: var(--muted); font-weight: 600; }
+.pill.crop-done { background: var(--green); color: #fff; padding-left: 28px; padding-right: 28px; }
 .spacer { flex: 1; }
 .pill {
   background: var(--panel-2);

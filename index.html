@@ -43,13 +43,27 @@
         <div class="split-line" id="split-line"></div>
         <div class="tag tag-before" id="tag-before">Before</div>
         <div class="tag tag-after" id="tag-after">After</div>
+        <div class="crop-box" id="crop-box">
+          <span class="h h-t" data-h="t"></span><span class="h h-b" data-h="b"></span>
+          <span class="h h-l" data-h="l"></span><span class="h h-r" data-h="r"></span>
+          <span class="h h-tl" data-h="tl"></span><span class="h h-tr" data-h="tr"></span>
+          <span class="h h-bl" data-h="bl"></span><span class="h h-br" data-h="br"></span>
+        </div>
       </div>
       <div class="stage-buttons">
         <button id="btn-back" class="pill">← Back</button>
         <span class="spacer"></span>
         <button id="btn-hold" class="pill">👁 Hold to see original</button>
         <button id="btn-compare" class="pill" aria-pressed="false">↔ Compare</button>
+        <button id="btn-crop" class="pill">✂️ Crop</button>
         <button id="btn-rotate" class="pill">⟳ Rotate</button>
+      </div>
+      <div class="stage-buttons crop-buttons">
+        <span class="crop-help">Drag the corners to choose what to keep</span>
+        <span class="spacer"></span>
+        <button id="crop-auto" class="pill">✨ Auto crop</button>
+        <button id="crop-none" class="pill">⬜ Whole photo</button>
+        <button id="crop-done" class="pill crop-done">✓ Done</button>
       </div>
     </div>
 

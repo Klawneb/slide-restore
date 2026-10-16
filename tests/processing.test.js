@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { analyze, lumaPlane, reblurRatio } from '../js/processing/analyze.js';
 import { render, rotate, applyColor, resolveParams } from '../js/processing/render.js';
 import { meanLab, histograms, percentile, rgbToLab } from '../js/processing/color.js';
+import { detectCrop, cropImage, rotateCrop } from '../js/processing/crop.js';
 
 const W = 240, H = 160;
 
@@ -193,5 +194,59 @@ describe('helpers', () => {
     const [L, a, b] = rgbToLab(1, 1, 1);
     expect(L).toBeCloseTo(100, 0);
     expect(Math.abs(a) + Math.abs(b)).toBeLessThan(0.5);
+  });
+});
+
+describe('auto crop', () => {
+  const MW = 320, MH = 240, OX = 40, OY = 40, RIM = 3;
+  // The test scene inside a slightly textured slide mount, with a dark film rim.
+  function mounted() {
+    const pic = scene();
+    const data = new Uint8ClampedArray(MW * MH * 4);
+    let seed = 7;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+      const i = (y * MW + x) * 4;
+      const px = x - OX, py = y - OY;
+      let c;
+      if (px >= 0 && py >= 0 && px < W && py < H) {
+        const inRim = px < RIM || py < RIM || px >= W - RIM || py >= H - RIM;
+        c = inRim ? [35, 28, 26] : Array.from(pic.data.subarray((py * W + px) * 4, (py * W + px) * 4 + 3));
+      } else {
+        const t = rand() * 10;
+        c = [205 + t, 188 + t, 182 + t];
+      }
+      data.set([...c, 255], i);
+    }
+    return { width: MW, height: MH, data };
+  }
+
+  it('crops a slide mount and film rim down to the picture', () => {
+    const c = detectCrop(mounted());
+    expect(c).not.toBeNull();
+    const px = [c.x0 * MW - OX, c.y0 * MH - OY, (1 - c.x1) * MW - (MW - OX - W), (1 - c.y1) * MH - (MH - OY - H)];
+    for (const inset of px) {
+      expect(inset).toBeGreaterThanOrEqual(RIM - 0.5); // rim removed
+      expect(inset).toBeLessThan(RIM + 6); // not much picture lost
+    }
+  });
+
+  it('leaves photos without a border alone', () => {
+    expect(detectCrop(scene())).toBeNull();
+    // Plain sky along one edge is picture, not a border.
+    const sky = mapPixels(scene(), (r, g, b) => [r, g, b]);
+    for (let i = 0; i < W * 40 * 4; i += 4) sky.data.set([150, 190, 235], i);
+    expect(detectCrop(sky)).toBeNull();
+  });
+
+  it('crops images and maps crops through rotation', () => {
+    const c = { x0: 0.1, y0: 0.2, x1: 0.7, y1: 0.9 };
+    const back = rotateCrop(rotateCrop(c, 1), -1);
+    for (const k of Object.keys(c)) expect(back[k]).toBeCloseTo(c[k], 9);
+    // Crop then rotate shows the same pixels as rotate then rotated crop.
+    const img = scene();
+    const a = rotate(cropImage(img, c), 1), b = cropImage(rotate(img, 1), rotateCrop(c, 1));
+    expect([a.width, a.height]).toEqual([b.width, b.height]);
+    expect(Array.from(a.data)).toEqual(Array.from(b.data));
   });
 });

@@ -36,6 +36,16 @@ export function analyze(img, crop = null, fullLongSide = null) {
       p.white[c] = hi + (p.white[c] - hi) * k;
     }
   }
+  // Black points far apart usually mean the darkest things are coloured
+  // (brown wood, deep blue sea) rather than tinted black: forcing them to
+  // neutral strips one colour out of every shadow.
+  {
+    const lo = Math.min(...p.black);
+    for (let c = 0; c < 3; c++) {
+      const spread = p.black[c] - lo;
+      if (spread > 30) p.black[c] = lo + 30 + (spread - 30) * 0.35;
+    }
+  }
 
   // 1b. Neutralise highlights: bright greyish areas (sand, clouds, walls)
   // carry a cast that mid-tone gamma barely touches, so adjust white points.
