@@ -1,0 +1,13 @@
+{
+  "name": "slide-restore",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "serve": "npx --yes serve -l 5173 .",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
