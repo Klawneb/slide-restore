@@ -2,7 +2,7 @@
 // background so updates appear the next time the app is opened.
 // Bump VERSION whenever files are added or renamed.
 
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `slide-restore-${VERSION}`;
 const FILES = [
   './',
@@ -25,7 +25,9 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache so a new version never stores old files.
+  const requests = FILES.map((f) => new Request(f, { cache: 'reload' }));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(requests)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -42,7 +44,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
       const cached = await cache.match(request, { ignoreSearch: true });
-      const fresh = fetch(request)
+      const fresh = fetch(request, { cache: 'no-cache' })
         .then((res) => { if (res.ok) cache.put(request, res.clone()); return res; })
         .catch(() => cached);
       if (cached) {
