@@ -2,6 +2,8 @@
 //
 // `auto` comes from analyze(); `adj` holds the user's slider offsets
 // (-100..100 each). Sliders nudge the auto values rather than replace them.
+// pickWarmth/pickTint are set by the white balance picker: like Warmth and
+// Tint but with a wider range, so the sliders stay free for fine-tuning.
 
 import { clamp } from './color.js';
 import { removeDustInPlace } from './dust.js';
@@ -30,12 +32,15 @@ export const NEUTRAL_AUTO = Object.freeze({
 
 export const ZERO_ADJ = Object.freeze({
   brightness: 0, contrast: 0, warmth: 0, tint: 0, saturation: 0, sharpness: 0, grain: 0,
+  pickWarmth: 0, pickTint: 0,
 });
+
+const PICK_MAX = 300;
 
 // Merge auto parameters with slider offsets into the values render() uses.
 export function resolveParams(auto, adj = ZERO_ADJ) {
   const a = { ...ZERO_ADJ, ...adj };
-  const w = a.warmth / 100, t = a.tint / 100;
+  const w = (a.warmth + a.pickWarmth) / 100, t = (a.tint + a.pickTint) / 100;
   // Per-channel gamma keeps black and white fixed while shifting mid-tones,
   // so warmth/tint never clip highlights.
   const gamma = [
@@ -110,10 +115,10 @@ const clipWeight = (v) => {
 };
 
 // Colour stage only (LUTs + vibrance/saturation). Returns a new image.
-export function applyColor(img, p) {
+// `out` can be a Float32Array to get unrounded values (0..255).
+export function applyColor(img, p, out = new Uint8ClampedArray(img.data.length)) {
   const [lr, lg, lb] = buildLuts(p);
   const src = img.data, n = src.length;
-  const out = new Uint8ClampedArray(n);
   const vib = p.vibrance ?? 0, sat = p.saturation ?? 1;
   const doSat = vib !== 0 || sat !== 1;
   const st = p.shadowTint, calm = p.shadowCalm ?? 0;
@@ -153,6 +158,36 @@ export function applyColor(img, p) {
     out[i + 3] = src[i + 3];
   }
   return { width: img.width, height: img.height, data: out };
+}
+
+// White balance picker: the pickWarmth and pickTint that make a source colour
+// ([r, g, b], 0..255) come out grey, other settings unchanged. Warmth moves
+// red against blue and tint moves green against both, so each is found in
+// turn by bisection. `exact` is false if it can't go far enough.
+export function neutralAdj(auto, adj, rgb) {
+  const src = { width: 1, height: 1, data: Uint8ClampedArray.from([...rgb, 255]) };
+  const out = new Float32Array(4);
+  const s = { ...ZERO_ADJ, ...adj };
+  const shown = () => applyColor(src, resolveParams(auto, s), out).data;
+  // f rises with the slider; find where it crosses 0.
+  const solve = (key, f) => {
+    let lo = -PICK_MAX, hi = PICK_MAX;
+    s[key] = lo; if (f(shown()) >= 0) return;
+    s[key] = hi; if (f(shown()) <= 0) return;
+    for (let i = 0; i < 14; i++) {
+      s[key] = (lo + hi) / 2;
+      if (f(shown()) < 0) lo = s[key]; else hi = s[key];
+    }
+  };
+  for (let round = 0; round < 4; round++) {
+    solve('pickWarmth', ([r, , b]) => r - b);
+    solve('pickTint', ([r, g, b]) => (r + b) / 2 - g);
+  }
+  s.pickWarmth = Math.round(s.pickWarmth);
+  s.pickTint = Math.round(s.pickTint);
+  const [r, g, b] = shown();
+  const exact = Math.max(r, g, b) - Math.min(r, g, b) < 4;
+  return { pickWarmth: s.pickWarmth, pickTint: s.pickTint, exact };
 }
 
 export function gaussianKernel(sigma) {

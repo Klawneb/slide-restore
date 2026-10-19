@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { analyze, lumaPlane, reblurRatio } from '../js/processing/analyze.js';
-import { render, rotate, applyColor, resolveParams, NEUTRAL_AUTO } from '../js/processing/render.js';
+import { render, rotate, applyColor, resolveParams, neutralAdj, NEUTRAL_AUTO } from '../js/processing/render.js';
 import { meanLab, histograms, percentile, rgbToLab } from '../js/processing/color.js';
 import { detectCrop, cropImage, rotateCrop, transform } from '../js/processing/crop.js';
 import { grainSigma } from '../js/processing/grain.js';
@@ -122,6 +122,37 @@ describe('tone', () => {
     expect(b).toBeGreaterThan(5);
     const brightest = (W - 1) * 4; // top-right pixel is near-white
     expect(warm.data[brightest]).toBeGreaterThan(245);
+  });
+});
+
+describe('white balance picker', () => {
+  const shown = (auto, adj, rgb) => [...applyColor({ width: 1, height: 1, data: Uint8ClampedArray.from([...rgb, 255]) }, resolveParams(auto, adj)).data].slice(0, 3);
+
+  it('makes the picked colour come out grey', () => {
+    for (const rgb of [[150, 140, 120], [120, 135, 160], [140, 155, 135], [200, 190, 205], [170, 120, 80], [60, 70, 95]]) {
+      const adj = { brightness: 20, contrast: 10 };
+      const { exact, ...pick } = neutralAdj(NEUTRAL_AUTO, adj, rgb);
+      expect(exact).toBe(true);
+      const [r, g, b] = shown(NEUTRAL_AUTO, { ...adj, ...pick }, rgb);
+      expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('works on top of Auto Fix and leaves the other sliders alone', () => {
+    const cast = mapPixels(scene(), casts.yellow);
+    const auto = analyze(cast);
+    const adj = { brightness: -15, saturation: 30, warmth: 40 };
+    const { exact, ...pick } = neutralAdj(auto, adj, [171, 163, 98]); // mid-grey under the cast
+    expect(exact).toBe(true);
+    const [r, g, b] = shown(auto, { ...adj, ...pick }, [171, 163, 98]);
+    expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThanOrEqual(2);
+    expect(adj).toEqual({ brightness: -15, saturation: 30, warmth: 40 });
+  });
+
+  it('goes as far as it can on an extreme colour', () => {
+    const res = neutralAdj(NEUTRAL_AUTO, {}, [230, 120, 10]);
+    expect(res.exact).toBe(false);
+    expect(res.pickWarmth).toBe(-300);
   });
 });
 

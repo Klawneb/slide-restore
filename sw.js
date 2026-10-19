@@ -3,7 +3,7 @@
 // Bump VERSION on every release: a changed sw.js is what makes installed
 // copies download the new files and switch over.
 
-const VERSION = 'v11';
+const VERSION = 'v12';
 const CACHE = `slide-restore-${VERSION}`;
 const FILES = [
   './',

@@ -1,10 +1,11 @@
 // Single-photo editor: Auto Fix, sliders, before/after, crop and straighten,
-// rotate, dust removal, zoom, undo/redo, save.
+// rotate, dust removal, white balance picker, zoom, undo/redo, save.
 
 import {
-  prepare, renderPreview, renderUncropped, renderDetail, setCrop, forget, exportJpeg, rotatedOriginal, latestOnly,
+  prepare, renderPreview, renderUncropped, renderDetail, setCrop, forget, exportJpeg, rotatedOriginal, latestOnly, baseParams,
 } from './engine.js';
-import { ZERO_ADJ } from './processing/render.js';
+import { ZERO_ADJ, neutralAdj } from './processing/render.js';
+import { luma } from './processing/color.js';
 import { FULL_CROP, rotateCrop } from './processing/crop.js';
 import { restoredName, saveBlob, canShareFiles, shareFiles, toast, busy, friendlyError } from './io.js';
 
@@ -27,6 +28,8 @@ let split = 0.5;
 let onClose = null;
 let cropRect = null; // while cropping: the rectangle as shown (after rotation)
 let cropAngle = 0; // while cropping: the straightening angle being tried
+let picking = false; // waiting for a tap on something white or grey
+let pickTap = null; // the tap that may pick, until it moves or becomes a pinch
 
 function previewSize() {
   const r = frame.getBoundingClientRect();
@@ -96,6 +99,7 @@ export async function openEditor(p, { inBatch = false, onBack } = {}) {
   $('btn-share').hidden = inBatch || !canShareFiles();
   $('photo-name').textContent = photo.name;
   endCropMode();
+  endPicking();
   resetZoom();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
@@ -196,6 +200,7 @@ $('btn-undo').addEventListener('click', undo);
 $('btn-redo').addEventListener('click', redo);
 
 window.addEventListener('keydown', (e) => {
+  if (picking && e.key === 'Escape') { endPicking(); return; }
   if (!editor.classList.contains('active') || !(e.ctrlKey || e.metaKey)) return;
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
@@ -267,6 +272,54 @@ $('btn-dust').addEventListener('click', () => {
   commit();
   toast(photo.dust ? 'Removing dust specks' : 'Dust removal off');
 });
+
+// ---------- White balance picker ----------
+// Tap the button, then tap something that should be white or grey: the
+// colours are shifted so that spot comes out neutral. Zooming still works
+// while picking, for small spots.
+
+function startPicking() {
+  frame.classList.remove('split', 'show-before');
+  $('btn-compare').setAttribute('aria-pressed', 'false');
+  layoutOverlay();
+  picking = true;
+  editor.classList.add('picking');
+  $('btn-pick').setAttribute('aria-pressed', 'true');
+}
+
+function endPicking() {
+  picking = false;
+  pickTap = null;
+  editor.classList.remove('picking');
+  $('btn-pick').setAttribute('aria-pressed', 'false');
+}
+
+function pickAt(x, y) {
+  const a = cvAfter.getBoundingClientRect();
+  const u = (x - a.left) / a.width, v = (y - a.top) / a.height;
+  if (!handle || u < 0 || u > 1 || v < 0 || v > 1) return; // missed the photo: keep waiting
+  endPicking();
+  // Average the original's colour over a finger-tip-sized spot (smaller when zoomed in).
+  const w = cvBefore.width, h = cvBefore.height;
+  const r = Math.max(1, Math.round((6 * w) / a.width));
+  const cx = Math.min(w - 1, Math.floor(u * w)), cy = Math.min(h - 1, Math.floor(v * h));
+  const x0 = Math.max(0, cx - r), y0 = Math.max(0, cy - r);
+  const d = cvBefore.getContext('2d').getImageData(x0, y0, Math.min(w, cx + r + 1) - x0, Math.min(h, cy + r + 1) - y0).data;
+  const rgb = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) { rgb[0] += d[i]; rgb[1] += d[i + 1]; rgb[2] += d[i + 2]; }
+  for (let c = 0; c < 3; c++) rgb[c] /= d.length / 4;
+  if (luma(...rgb) < 25) { toast('That spot is too dark – try something lighter'); return; }
+  if (Math.min(...rgb) > 250) { toast('That spot is pure white – try an off-white or grey'); return; }
+  const { exact, ...pick } = neutralAdj(baseParams(photo), photo.adj, rgb);
+  Object.assign(photo.adj, pick);
+  changed();
+  commit();
+  toast(exact ? 'Colour balanced on that spot' : 'Colour balanced as far as it will go');
+}
+
+$('btn-pick').addEventListener('click', () => (picking ? endPicking() : startPicking()));
+$('pick-hint').addEventListener('pointerdown', (e) => e.stopPropagation());
+$('pick-cancel').addEventListener('click', endPicking);
 
 $('btn-back').addEventListener('click', close);
 $('btn-done').addEventListener('click', close);
@@ -394,6 +447,13 @@ frame.addEventListener('pointerdown', (e) => {
     const [p, q] = [...pointers.values()];
     gesture = { type: 'pinch', d: Math.hypot(p.x - q.x, p.y - q.y), mx: (p.x + q.x) / 2, my: (p.y + q.y) / 2 };
     cvDetail.classList.remove('ready');
+    pickTap = null;
+    return;
+  }
+  if (picking) {
+    // A tap picks; a drag only pans (no double-tap zoom, which a quick second pick would trigger).
+    pickTap = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    gesture = zoom.s > 1 ? { type: 'pan', x: e.clientX, y: e.clientY } : null;
     return;
   }
   // Double-tap: zoom in to that spot, or back out.
@@ -429,6 +489,11 @@ frame.addEventListener('pointermove', (e) => {
 });
 
 function endPointer(e) {
+  if (pickTap?.id === e.pointerId) {
+    const tap = e.type === 'pointerup' && Math.hypot(e.clientX - pickTap.x, e.clientY - pickTap.y) < 10;
+    pickTap = null;
+    if (tap) pickAt(e.clientX, e.clientY);
+  }
   pointers.delete(e.pointerId);
   if (pointers.size === 0) {
     if (gesture?.type === 'pinch' || gesture?.type === 'pan') requestDetail();
@@ -458,6 +523,7 @@ $('zoom-out').addEventListener('click', resetZoom);
 const MIN_CROP = 0.1;
 
 function startCropMode() {
+  endPicking();
   resetZoom();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');

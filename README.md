@@ -14,6 +14,9 @@ photos are never uploaded anywhere.
   If the crop is wrong, tap **Crop** and drag the corners or edges (or drag inside the box to move it), use the
   **Straighten** slider if needed, then **Done**. **Auto crop** puts the detected crop back; **Whole photo** removes it.
   **Remove dust** switches dust removal on or off.
+- **Pick white** fixes a colour cast from one spot: tap it, then tap something in the photo that should be white or
+  grey (a wall, a shirt, a cloud). The colours are shifted so that spot comes out neutral; Warmth and Tint still nudge it
+  from there. Pinch to zoom first if the spot is small.
 - **Smooth grain** softens film grain on flat areas (sky, walls, skin) while keeping edges sharp. Auto Fix sets it
   from how grainy the scan is (busy pictures, where grain is hard to see, get none); the slider adds or removes it.
 - **Zoom**: pinch the photo (or double-tap it) to look closely; drag to move around. When you stop moving, the part
