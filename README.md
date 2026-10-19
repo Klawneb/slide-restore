@@ -19,6 +19,9 @@ photos are never uploaded anywhere.
   from there. Pinch to zoom first if the spot is small.
 - **Smooth grain** softens film grain on flat areas (sky, walls, skin) while keeping edges sharp. Auto Fix sets it
   from how grainy the scan is (busy pictures, where grain is hard to see, get none); the slider adds or removes it.
+- **Heal spots** removes a spot, hair or scratch that dust removal missed: tap it, then paint over the blemish with a
+  finger. It's covered with a nearby patch of the picture, blended in so no edge shows. Pinch to zoom in on small ones
+  (the brush stays the same size on screen, so it gets finer); **Brush size** changes it. **Done** goes back.
 - **Zoom**: pinch the photo (or double-tap it) to look closely; drag to move around. When you stop moving, the part
   on screen is shown at the scan's full resolution. **Zoom out** (or double-tap again) goes back.
 - **Undo** and **Redo** step back and forward through your changes to a photo (Ctrl+Z / Ctrl+Y with a keyboard).
@@ -62,6 +65,11 @@ npm run crops -- out/ scan.jpg ...   # draws the detected border crop on each sc
 
 Dust removal (`dust.js`): small spots much lighter or darker than their surroundings (found by morphological
 opening/closing), only where the surroundings are smooth and the spots are sparse – so foliage and sparkle are left alone.
+
+Spot healing (`heal.js`): each stroke is stored in the scan's own coordinates with the offset of the patch it copies,
+chosen once on the preview (the nearby spot whose surroundings match best, without overlapping the stroke or containing
+anything busier than its surroundings), so preview, zoom and saved photo heal alike. The patch's colours are corrected by a
+smooth membrane (pull-push, then relaxed) so they meet the surroundings seamlessly. Long strokes are healed in pieces.
 
 Grain smoothing (`grain.js`): a self-guided filter on brightness, which flattens ripples about as strong as the
 grain and keeps anything stronger. Grain strength is measured in flat areas of a full-resolution patch.

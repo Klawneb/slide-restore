@@ -4,6 +4,7 @@ import { render, rotate, applyColor, resolveParams, neutralAdj, NEUTRAL_AUTO } f
 import { meanLab, histograms, percentile, rgbToLab } from '../js/processing/color.js';
 import { detectCrop, cropImage, rotateCrop, transform } from '../js/processing/crop.js';
 import { grainSigma } from '../js/processing/grain.js';
+import { healInPlace, findSource, splitStroke } from '../js/processing/heal.js';
 
 const W = 240, H = 160;
 
@@ -449,5 +450,87 @@ describe('grain smoothing', () => {
   it('analyze turns grain smoothing on for grainy photos only', () => {
     expect(analyze(grainy()).grain).toBeGreaterThan(0.3);
     expect(analyze(scene()).grain).toBe(0);
+  });
+});
+
+describe('spot healing', () => {
+  // A grainy sky-like gradient with a dark speck in it.
+  const SW = 200, SH = 150, CX = 100, CY = 75;
+  function speckled() {
+    const data = new Uint8ClampedArray(SW * SH * 4);
+    let seed = 7;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5;
+    for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+      const i = (y * SW + x) * 4, n = rand() * 12;
+      const dark = Math.hypot(x + 0.5 - CX, y + 0.5 - CY) < 4;
+      data[i] = dark ? 30 : 90 + x * 0.4 + n;
+      data[i + 1] = dark ? 30 : 130 + x * 0.3 + n;
+      data[i + 2] = dark ? 30 : 200 + n;
+      data[i + 3] = 255;
+    }
+    return { width: SW, height: SH, data };
+  }
+  const meanAround = (img, r0, r1) => {
+    let s = 0, n = 0;
+    for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+      const d = Math.hypot(x + 0.5 - CX, y + 0.5 - CY);
+      if (d >= r0 && d < r1) { s += img.data[(y * SW + x) * 4]; n++; }
+    }
+    return s / n;
+  };
+  const stroke = { pts: [[CX / SW, CY / SH]], r: 6 / SW };
+
+  it('takes the patch from clear of the spot, inside the picture', () => {
+    const { dx, dy } = findSource(speckled(), stroke);
+    const ox = dx * SW, oy = dy * SH;
+    expect(Math.hypot(ox, oy)).toBeGreaterThan(2 * 6);
+    expect(CX + ox).toBeGreaterThan(8); expect(CX + ox).toBeLessThan(SW - 8);
+    expect(CY + oy).toBeGreaterThan(8); expect(CY + oy).toBeLessThan(SH - 8);
+  });
+
+  it('covers the spot so it matches its surroundings, and leaves the rest alone', () => {
+    const before = speckled();
+    const img = speckled();
+    healInPlace(img, { ...stroke, ...findSource(img, stroke) });
+    expect(Math.abs(meanAround(img, 0, 4) - meanAround(img, 10, 14))).toBeLessThan(5);
+    // Grain is kept: the healed spot isn't flat.
+    const vals = [];
+    for (let y = CY - 3; y < CY + 3; y++) for (let x = CX - 3; x < CX + 3; x++) vals.push(img.data[(y * SW + x) * 4]);
+    const m = vals.reduce((a, b) => a + b) / vals.length;
+    expect(Math.sqrt(vals.reduce((a, v) => a + (v - m) ** 2, 0) / vals.length)).toBeGreaterThan(1.5);
+    for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+      if (Math.hypot(x + 0.5 - CX, y + 0.5 - CY) > 12) {
+        const i = (y * SW + x) * 4;
+        expect(img.data[i]).toBe(before.data[i]);
+      }
+    }
+  });
+
+  it('fills smoothly when there is no patch', () => {
+    const img = speckled();
+    healInPlace(img, { ...stroke, dx: 0, dy: 0 });
+    expect(Math.abs(meanAround(img, 0, 4) - meanAround(img, 10, 14))).toBeLessThan(5);
+  });
+
+  it('heals the same way at a larger size', () => {
+    // Twice the size: the stroke and patch are in fractions, so they scale.
+    const small = speckled();
+    const s = { ...stroke, ...findSource(small, stroke) };
+    const big = { width: SW * 2, height: SH * 2, data: new Uint8ClampedArray(SW * SH * 16) };
+    for (let y = 0; y < SH * 2; y++) for (let x = 0; x < SW * 2; x++) {
+      big.data.set(small.data.subarray(((y >> 1) * SW + (x >> 1)) * 4, ((y >> 1) * SW + (x >> 1)) * 4 + 4), (y * SW * 2 + x) * 4);
+    }
+    healInPlace(big, s);
+    let sum = 0, n = 0;
+    for (let y = 2 * CY - 6; y < 2 * CY + 6; y++) for (let x = 2 * CX - 6; x < 2 * CX + 6; x++) { sum += big.data[(y * SW * 2 + x) * 4]; n++; }
+    expect(sum / n).toBeGreaterThan(100);
+  });
+
+  it('splits long strokes into pieces that join up', () => {
+    const pts = Array.from({ length: 41 }, (_, i) => [0.1 + i * 0.01, 0.5]);
+    const pieces = splitStroke({ pts, r: 0.01 }, 1);
+    expect(pieces.length).toBe(5);
+    for (let i = 1; i < pieces.length; i++) expect(pieces[i].pts[0]).toEqual(pieces[i - 1].pts.at(-1));
+    expect(splitStroke({ pts: [[0.5, 0.5]], r: 0.01 }, 1)).toHaveLength(1);
   });
 });

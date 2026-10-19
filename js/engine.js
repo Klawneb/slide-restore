@@ -36,6 +36,7 @@ export function newPhoto(file) {
     useAuto: false,   // whether Auto Fix is switched on
     adj: { ...ZERO_ADJ },
     rot: 0,
+    heals: [],        // spot healing strokes (see processing/heal.js), in order
     saved: false,
   };
 }
@@ -52,7 +53,7 @@ export function baseParams(photo) {
 }
 
 export function isEdited(photo) {
-  return photo.useAuto || photo.dust || photo.rot % 4 !== 0 || !isFullCrop(photo.crop)
+  return photo.useAuto || photo.dust || photo.rot % 4 !== 0 || !isFullCrop(photo.crop) || photo.heals.length > 0
     || Object.values(photo.adj).some((v) => v !== 0);
 }
 
@@ -83,18 +84,23 @@ export async function setCrop(photo, crop) {
 }
 
 export function renderPreview(handle, photo) {
-  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop });
+  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, heals: photo.heals });
 }
 
 // The whole photo (ignoring the crop, but straightened by angle), for the crop screen.
 export function renderUncropped(handle, photo, angle = 0) {
   const crop = angle ? { x0: 0, y0: 0, x1: 1, y1: 1, angle } : null;
-  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop });
+  return call('render', { key: handle.key, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop, heals: photo.heals });
 }
 
 // Full-resolution render of part of the photo as shown (region in 0..1).
 export function renderDetail(handle, photo, region) {
-  return call('detail', { key: handle.key, file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, region });
+  return call('detail', { key: handle.key, file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, heals: photo.heals, region });
+}
+
+// Where a new heal stroke should take its patch from: { dx, dy }.
+export function findHealSource(handle, photo, stroke) {
+  return call('healSource', { key: handle.key, heals: photo.heals, stroke });
 }
 
 export function forget(handle) {
@@ -102,7 +108,7 @@ export function forget(handle) {
 }
 
 export function exportJpeg(photo, quality = 0.95) {
-  return call('export', { file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, quality });
+  return call('export', { file: photo.file, base: baseParams(photo), adj: photo.adj, rot: photo.rot, crop: photo.crop, heals: photo.heals, quality });
 }
 
 export function rotatedOriginal(original, rot, crop = null) {

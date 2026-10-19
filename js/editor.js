@@ -1,12 +1,14 @@
 // Single-photo editor: Auto Fix, sliders, before/after, crop and straighten,
-// rotate, dust removal, white balance picker, zoom, undo/redo, save.
+// rotate, dust removal, white balance picker, spot healing, zoom, undo/redo, save.
 
 import {
   prepare, renderPreview, renderUncropped, renderDetail, setCrop, forget, exportJpeg, rotatedOriginal, latestOnly, baseParams,
+  findHealSource,
 } from './engine.js';
 import { ZERO_ADJ, neutralAdj } from './processing/render.js';
 import { luma } from './processing/color.js';
 import { FULL_CROP, rotateCrop } from './processing/crop.js';
+import { splitStroke } from './processing/heal.js';
 import { restoredName, saveBlob, canShareFiles, shareFiles, toast, busy, friendlyError } from './io.js';
 import { savePhoto } from './session.js';
 
@@ -15,6 +17,7 @@ const frame = $('frame');
 const cvAfter = $('cv-after');
 const cvBefore = $('cv-before');
 const cvDetail = $('cv-detail');
+const cvBrush = $('cv-brush');
 const splitLine = $('split-line');
 const autoBtn = $('btn-auto');
 const editor = $('editor');
@@ -31,6 +34,9 @@ let cropRect = null; // while cropping: the rectangle as shown (after rotation)
 let cropAngle = 0; // while cropping: the straightening angle being tried
 let picking = false; // waiting for a tap on something white or grey
 let pickTap = null; // the tap that may pick, until it moves or becomes a pinch
+let healing = false; // painting over spots to heal them
+let paint = null; // the heal stroke being painted, on screen: { id, pts: [[x, y], ...], r }
+let painted = []; // finished strokes, drawn over the photo until it's shown healed: { pts, r, healed }
 
 function previewSize() {
   const r = frame.getBoundingClientRect();
@@ -40,11 +46,12 @@ function previewSize() {
 
 const refresh = latestOnly(async () => {
   if (!handle) return;
-  const h = handle;
+  const h = handle, heals = photo.heals.length;
   const img = await (cropRect ? renderUncropped(h, photo, cropAngle) : renderPreview(h, photo));
   if (h !== handle) return; // photo changed meanwhile
   cvAfter.width = img.width; cvAfter.height = img.height;
   cvAfter.getContext('2d').putImageData(img, 0, 0);
+  if (painted.some((s) => s.healed <= heals)) { painted = painted.filter((s) => !(s.healed <= heals)); drawBrush(); }
   drawBefore();
   layoutOverlay();
   layoutCrop();
@@ -101,6 +108,7 @@ export async function openEditor(p, { inBatch = false, onBack } = {}) {
   $('photo-name').textContent = photo.name;
   endCropMode();
   endPicking();
+  endHealing();
   resetZoom();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
@@ -147,7 +155,7 @@ function changed() {
 const HISTORY_MAX = 100;
 
 function snapshot() {
-  return { useAuto: photo.useAuto, dust: photo.dust, adj: { ...photo.adj }, rot: photo.rot, crop: photo.crop };
+  return { useAuto: photo.useAuto, dust: photo.dust, adj: { ...photo.adj }, rot: photo.rot, crop: photo.crop, heals: photo.heals };
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -171,7 +179,7 @@ function commit() {
 
 function syncHistoryButtons() {
   const hist = photo?.history;
-  $('btn-undo').disabled = !hist?.undo.length;
+  $('btn-undo').disabled = $('heal-undo').disabled = !hist?.undo.length;
   $('btn-redo').disabled = !hist?.redo.length;
 }
 
@@ -184,7 +192,7 @@ async function step(from, to) {
   to.push(hist.at);
   hist.at = s;
   const reframe = s.rot !== photo.rot || !same(s.crop, photo.crop);
-  Object.assign(photo, { useAuto: s.useAuto, dust: s.dust, adj: { ...s.adj }, rot: s.rot });
+  Object.assign(photo, { useAuto: s.useAuto, dust: s.dust, adj: { ...s.adj }, rot: s.rot, heals: s.heals ?? [] });
   try {
     if (!same(s.crop, photo.crop)) await withBusy(() => setCrop(photo, s.crop));
   } catch (err) {
@@ -205,6 +213,7 @@ $('btn-redo').addEventListener('click', redo);
 
 window.addEventListener('keydown', (e) => {
   if (picking && e.key === 'Escape') { endPicking(); return; }
+  if (healing && e.key === 'Escape') { endHealing(); return; }
   if (!editor.classList.contains('active') || !(e.ctrlKey || e.metaKey)) return;
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
@@ -254,6 +263,7 @@ $('btn-reset').addEventListener('click', async () => {
   photo.dust = false;
   photo.adj = { ...ZERO_ADJ };
   photo.rot = 0;
+  photo.heals = [];
   await withBusy(() => setCrop(photo, null));
   resetZoom();
   syncControls();
@@ -283,6 +293,7 @@ $('btn-dust').addEventListener('click', () => {
 // while picking, for small spots.
 
 function startPicking() {
+  endHealing();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
   layoutOverlay();
@@ -325,6 +336,134 @@ $('btn-pick').addEventListener('click', () => (picking ? endPicking() : startPic
 $('pick-hint').addEventListener('pointerdown', (e) => e.stopPropagation());
 $('pick-cancel').addEventListener('click', endPicking);
 
+// ---------- Heal spots ----------
+// Paint over a spot, hair or scratch: it's covered with a nearby patch of
+// the picture (chosen by the worker) blended into what's round it. One finger
+// paints; pinch to zoom and move around. The brush is a size on screen, so
+// zooming in makes it finer.
+
+const healSize = $('heal-size');
+let healQueue = Promise.resolve();
+
+function startHealing() {
+  endPicking();
+  frame.classList.remove('split', 'show-before');
+  $('btn-compare').setAttribute('aria-pressed', 'false');
+  layoutOverlay();
+  healing = true;
+  editor.classList.add('healing');
+  sizeBrush();
+}
+
+function endHealing() {
+  healing = false;
+  paint = null;
+  painted = [];
+  editor.classList.remove('healing');
+  drawBrush();
+}
+
+function sizeBrush() {
+  const k = Math.min(devicePixelRatio || 1, 2);
+  cvBrush.width = Math.round(frame.clientWidth * k);
+  cvBrush.height = Math.round(frame.clientHeight * k);
+  drawBrush();
+}
+
+// The strokes being healed, and an outline of the brush at `ring` (client
+// coordinates) to show its size.
+function drawBrush(ring = null) {
+  const ctx = cvBrush.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cvBrush.width, cvBrush.height);
+  if (!healing) return;
+  const f = frame.getBoundingClientRect(), k = cvBrush.width / (f.width || 1);
+  ctx.setTransform(k, 0, 0, k, -f.left * k, -f.top * k);
+  ctx.strokeStyle = ctx.fillStyle = 'rgba(255, 90, 70, .5)';
+  ctx.lineCap = ctx.lineJoin = 'round';
+  for (const s of paint ? [...painted, paint] : painted) {
+    if (s.pts.length === 1) {
+      ctx.beginPath(); ctx.arc(s.pts[0][0], s.pts[0][1], s.r, 0, 2 * Math.PI); ctx.fill();
+      continue;
+    }
+    ctx.lineWidth = 2 * s.r;
+    ctx.beginPath();
+    s.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.stroke();
+  }
+  if (ring) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, .9)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(ring.x, ring.y, Number(healSize.value), 0, 2 * Math.PI); ctx.stroke();
+  }
+}
+
+// A stroke painted on screen, as a stroke on the photo's own pixels (before
+// straightening, cropping and turning), in fractions of it. Null if it
+// missed the photo.
+function toPhotoStroke(s) {
+  const a = cvAfter.getBoundingClientRect();
+  const W = photo.fullWidth, H = photo.fullHeight;
+  const c = photo.crop ?? FULL_CROP, q = photo.rot % 4;
+  const rad = ((c.angle || 0) * Math.PI) / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+  const round = (v) => Math.round(v * 1e6) / 1e6;
+  let hit = false;
+  const pts = s.pts.map(([x, y]) => {
+    let u = (x - a.left) / a.width, v = (y - a.top) / a.height;
+    if (u >= 0 && u <= 1 && v >= 0 && v <= 1) hit = true;
+    for (let i = 0; i < q; i++) [u, v] = [v, 1 - u]; // undo the quarter turns
+    let X = (c.x0 + u * (c.x1 - c.x0)) * W, Y = (c.y0 + v * (c.y1 - c.y0)) * H;
+    if (rad) { // undo the straightening, as crop.js transform() does it
+      const ex = X - W / 2, ey = Y - H / 2;
+      [X, Y] = [W / 2 + ex * cos + ey * sin, H / 2 - ex * sin + ey * cos];
+    }
+    return [round(X / W), round(Y / H)];
+  });
+  if (!hit) return null;
+  const across = q % 2 ? (c.y1 - c.y0) * H : (c.x1 - c.x0) * W; // scan pixels across the photo as shown
+  return { pts, r: round((s.r * across) / a.width / Math.max(W, H)) };
+}
+
+function heal(s) {
+  const stroke = toPhotoStroke(s);
+  if (!stroke) { drawBrush(); return; }
+  painted.push(s);
+  drawBrush();
+  const p = photo, h = handle;
+  // One at a time, so each stroke's patch is chosen from the photo as healed so far.
+  healQueue = healQueue.then(async () => {
+    if (h !== handle) return;
+    try {
+      // Long strokes in pieces, each with its own patch; still one step to undo.
+      let heals = p.heals;
+      for (const piece of splitStroke(stroke, p.fullWidth / p.fullHeight)) {
+        const src = await findHealSource(h, { ...p, heals }, piece);
+        if (h !== handle) return;
+        heals = [...heals, { ...piece, ...src }];
+      }
+      p.heals = heals;
+      s.healed = p.heals.length; // shown healed once a render includes this many
+      changed();
+      commit();
+    } catch (err) {
+      console.error(err);
+      toast(friendlyError(err));
+      painted = painted.filter((x) => x !== s);
+      drawBrush();
+    }
+  });
+}
+
+$('btn-heal').addEventListener('click', startHealing);
+$('heal-done').addEventListener('click', endHealing);
+$('heal-undo').addEventListener('click', undo);
+// Show the brush's size in the middle of the photo while it's being changed.
+healSize.addEventListener('input', () => {
+  const f = frame.getBoundingClientRect();
+  drawBrush({ x: f.left + f.width / 2, y: f.top + f.height / 2 });
+});
+healSize.addEventListener('change', () => setTimeout(() => drawBrush(), 600));
+
 $('btn-back').addEventListener('click', close);
 $('btn-done').addEventListener('click', close);
 
@@ -354,6 +493,7 @@ window.addEventListener('resize', () => {
   resetZoom();
   layoutOverlay();
   layoutCrop();
+  if (healing) sizeBrush();
 });
 
 // ---------- Zoom ----------
@@ -452,6 +592,13 @@ frame.addEventListener('pointerdown', (e) => {
     gesture = { type: 'pinch', d: Math.hypot(p.x - q.x, p.y - q.y), mx: (p.x + q.x) / 2, my: (p.y + q.y) / 2 };
     cvDetail.classList.remove('ready');
     pickTap = null;
+    if (paint) { paint = null; drawBrush(); } // a pinch, not painting
+    return;
+  }
+  if (healing) {
+    paint = { id: e.pointerId, pts: [[e.clientX, e.clientY]], r: Number(healSize.value) };
+    gesture = null;
+    drawBrush();
     return;
   }
   if (picking) {
@@ -475,8 +622,15 @@ frame.addEventListener('pointerdown', (e) => {
 });
 
 frame.addEventListener('pointermove', (e) => {
+  if (healing && !paint && e.pointerType === 'mouse' && !pointers.size) drawBrush({ x: e.clientX, y: e.clientY });
   if (!pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (paint?.id === e.pointerId) {
+    const [lx, ly] = paint.pts.at(-1);
+    if (Math.hypot(e.clientX - lx, e.clientY - ly) >= Math.max(2, paint.r * 0.25)) paint.pts.push([e.clientX, e.clientY]);
+    drawBrush();
+    return;
+  }
   if (gesture?.type === 'pinch' && pointers.size >= 2) {
     const [p, q] = [...pointers.values()];
     const d = Math.hypot(p.x - q.x, p.y - q.y), mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
@@ -493,6 +647,11 @@ frame.addEventListener('pointermove', (e) => {
 });
 
 function endPointer(e) {
+  if (paint?.id === e.pointerId) {
+    const s = paint;
+    paint = null;
+    if (e.type === 'pointerup') { s.pts.push([e.clientX, e.clientY]); heal(s); } else drawBrush();
+  }
   if (pickTap?.id === e.pointerId) {
     const tap = e.type === 'pointerup' && Math.hypot(e.clientX - pickTap.x, e.clientY - pickTap.y) < 10;
     pickTap = null;
@@ -509,6 +668,7 @@ function endPointer(e) {
   }
 }
 ['pointerup', 'pointercancel'].forEach((t) => frame.addEventListener(t, endPointer));
+frame.addEventListener('pointerleave', () => { if (healing && !paint) drawBrush(); });
 
 frame.addEventListener('wheel', (e) => {
   if (cropRect) return;
@@ -528,6 +688,7 @@ const MIN_CROP = 0.1;
 
 function startCropMode() {
   endPicking();
+  endHealing();
   resetZoom();
   frame.classList.remove('split', 'show-before');
   $('btn-compare').setAttribute('aria-pressed', 'false');
