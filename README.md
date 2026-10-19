@@ -23,6 +23,8 @@ photos are never uploaded anywhere.
   on screen is shown at the scan's full resolution. **Zoom out** (or double-tap again) goes back.
 - **Undo** and **Redo** step back and forward through your changes to a photo (Ctrl+Z / Ctrl+Y with a keyboard).
   Double-tap a slider to centre it again. **↺ Start again** undoes everything (and can itself be undone).
+- **Closing the app is safe**: the photos being worked on, their settings and undo history are kept on the tablet,
+  and the app reopens where it was left. Going back to the home screen ends that work and clears them.
 
 ## Installing on the Android tablet
 1. Open the app's web address (see *Hosting* below) in **Chrome** on the tablet.

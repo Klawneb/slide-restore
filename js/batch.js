@@ -1,7 +1,8 @@
 // Batch screen: many photos, Auto Fix All, Save All.
 
-import { newPhoto, prepare, renderPreview, forget, exportJpeg, isEdited, setCrop } from './engine.js';
+import { prepare, renderPreview, forget, exportJpeg, isEdited, setCrop } from './engine.js';
 import { restoredName, saveBlob, canShareFiles, shareFiles, toast, friendlyError, sleep } from './io.js';
+import { savePhoto, removePhoto } from './session.js';
 
 const $ = (id) => document.getElementById(id);
 const grid = $('grid');
@@ -15,8 +16,8 @@ export function initBatch({ onEdit, onHome }) {
   callbacks = { onEdit, onHome };
 }
 
-export async function addFiles(files) {
-  const added = files.map((file) => ({ photo: newPhoto(file) }));
+export async function addPhotos(photos) {
+  const added = photos.map((photo) => ({ photo }));
   items.push(...added);
   added.forEach(makeTile);
   updateTitle();
@@ -24,6 +25,7 @@ export async function addFiles(files) {
   for (const it of added) {
     try {
       it.handle = await prepare(it.photo, THUMB);
+      savePhoto(it.photo);
       await drawThumb(it);
     } catch (err) {
       console.error(err);
@@ -41,7 +43,7 @@ export function clearBatch() {
 
 export async function refreshItem(photo) {
   const it = items.find((i) => i.photo === photo);
-  if (it) await drawThumb(it);
+  if (it?.handle) await drawThumb(it); // (otherwise still being opened, and drawn then)
 }
 
 function makeTile(it) {
@@ -57,6 +59,7 @@ function makeTile(it) {
     e.stopPropagation();
     if (running) return;
     forget(it.handle);
+    removePhoto(it.photo);
     items = items.filter((i) => i !== it);
     tile.remove();
     updateTitle();
@@ -125,6 +128,7 @@ $('batch-auto').addEventListener('click', async () => {
       it.photo.dust = true;
       it.photo.saved = false;
       try { await setCrop(it.photo, it.photo.autoCrop); } catch (err) { console.error(err); }
+      savePhoto(it.photo);
     }
     await drawThumb(it);
   }
@@ -160,6 +164,7 @@ $('batch-save').addEventListener('click', async () => {
   const ok = await exportAll('Saving', async (it, blob) => {
     saveBlob(blob, restoredName(it.photo.name));
     it.photo.saved = true;
+    savePhoto(it.photo);
     setBadge(it);
     await sleep(350); // give the browser a moment between downloads
   });
@@ -178,7 +183,7 @@ if (canShareFiles()) {
     if (!files.length) return;
     try {
       if (await shareFiles(files)) {
-        done.forEach((it) => { it.photo.saved = true; setBadge(it); });
+        done.forEach((it) => { it.photo.saved = true; savePhoto(it.photo); setBadge(it); });
       }
     } catch (err) {
       console.error(err);

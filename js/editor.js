@@ -8,6 +8,7 @@ import { ZERO_ADJ, neutralAdj } from './processing/render.js';
 import { luma } from './processing/color.js';
 import { FULL_CROP, rotateCrop } from './processing/crop.js';
 import { restoredName, saveBlob, canShareFiles, shareFiles, toast, busy, friendlyError } from './io.js';
+import { savePhoto } from './session.js';
 
 const $ = (id) => document.getElementById(id);
 const frame = $('frame');
@@ -113,6 +114,7 @@ export async function openEditor(p, { inBatch = false, onBack } = {}) {
     const h = await prepare(photo, previewSize());
     handle = h;
     original = h.original;
+    savePhoto(photo); // keep the analysis, so reopening is quicker
     commit();
     syncControls();
     refresh();
@@ -133,6 +135,7 @@ function close() {
 
 function changed() {
   photo.saved = false;
+  savePhoto(photo);
   refresh();
 }
 
@@ -162,6 +165,7 @@ function commit() {
   if (hist.undo.length > HISTORY_MAX) hist.undo.shift();
   hist.redo = [];
   hist.at = now;
+  savePhoto(photo);
   syncHistoryButtons();
 }
 
@@ -641,6 +645,7 @@ $('btn-save').addEventListener('click', async () => {
     const blob = await makeJpeg();
     saveBlob(blob, restoredName(photo.name));
     photo.saved = true;
+    savePhoto(photo);
     toast('Saved to your Downloads');
   } catch (err) {
     console.error(err);
@@ -652,7 +657,7 @@ $('btn-share').addEventListener('click', async () => {
   try {
     const blob = await makeJpeg();
     const file = new File([blob], restoredName(photo.name), { type: 'image/jpeg' });
-    if (await shareFiles([file])) photo.saved = true;
+    if (await shareFiles([file])) { photo.saved = true; savePhoto(photo); }
   } catch (err) {
     console.error(err);
     toast(friendlyError(err));
