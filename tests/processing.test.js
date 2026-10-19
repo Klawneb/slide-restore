@@ -232,7 +232,7 @@ describe('helpers', () => {
 describe('auto crop', () => {
   const MW = 320, MH = 240, OX = 40, OY = 40, RIM = 3;
   // The test scene inside a slightly textured slide mount, with a dark film rim.
-  function mounted() {
+  function mounted(mount = [205, 188, 182], rim = [35, 28, 26]) {
     const pic = scene();
     const data = new Uint8ClampedArray(MW * MH * 4);
     let seed = 7;
@@ -243,10 +243,10 @@ describe('auto crop', () => {
       let c;
       if (px >= 0 && py >= 0 && px < W && py < H) {
         const inRim = px < RIM || py < RIM || px >= W - RIM || py >= H - RIM;
-        c = inRim ? [35, 28, 26] : Array.from(pic.data.subarray((py * W + px) * 4, (py * W + px) * 4 + 3));
+        c = inRim ? rim : Array.from(pic.data.subarray((py * W + px) * 4, (py * W + px) * 4 + 3));
       } else {
         const t = rand() * 10;
-        c = [205 + t, 188 + t, 182 + t];
+        c = mount.map((v) => v + t);
       }
       data.set([...c, 255], i);
     }
@@ -261,6 +261,13 @@ describe('auto crop', () => {
       expect(inset).toBeGreaterThanOrEqual(RIM - 0.5); // rim removed
       expect(inset).toBeLessThan(RIM + 6); // not much picture lost
     }
+  });
+
+  it('crops a dark grey mount when the film rim shows inside it', () => {
+    const c = detectCrop(mounted([60, 60, 64], [10, 8, 8]));
+    expect(c).not.toBeNull();
+    expect(c.x0 * MW - OX).toBeGreaterThanOrEqual(RIM - 0.5);
+    expect(c.x0 * MW - OX).toBeLessThan(RIM + 6);
   });
 
   it('copes with uneven lighting, writing on the mount and a picture near one edge', () => {

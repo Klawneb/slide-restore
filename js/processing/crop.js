@@ -85,17 +85,21 @@ function detectRect(img) {
     const [a, b] = hue(s.med);
     return Math.abs(a - ref[0]) < 18 && Math.abs(b - ref[1]) < 18 && s.lum > refLum * 0.25 && s.lum < refLum / 0.25;
   });
-  // Mounts are card or plastic, light where the lighting is good: deep
-  // shadow round the edge of a borderless photo is not a mount.
-  if (mount.length < 2 || Math.max(...mount.map((s) => s.lum)) < 90) return null;
+  if (mount.length < 2) return null;
+  // Mounts are usually light card or plastic, but grey ones and dim photos
+  // of slides look dark. A dark "mount" needs the film's rim, darker still,
+  // showing inside it: deep shadow round the edge of a borderless photo has
+  // only brighter picture inside.
+  const dim = Math.max(...mount.map((s) => s.lum)) < 90;
 
   // Two passes: the second measures each side only along the picture found
   // by the first, so a big mount doesn't dilute the measurements.
   let span = { x0: 0.2, x1: 0.8, y0: 0.2, y1: 0.8 };
   let edges = null;
   for (let pass = 0; pass < 2; pass++) {
-    edges = mount.map((s) => ({ side: s.side, ...(filmEdge(img, L, s, span) ?? {}) })).filter((e) => e.film != null);
+    edges = mount.map((s) => ({ side: s.side, lum: s.lum, ...(filmEdge(img, L, s, span) ?? {}) })).filter((e) => e.film != null);
     if (edges.length < 2) return null; // one "edge" alone is more likely picture
+    if (dim && edges.filter((e) => e.rim != null && e.rimL < e.lum * 0.6).length < 2) return null;
     const cut = Object.fromEntries(edges.map((e) => [e.side, e.film]));
     const x0 = (cut.left ?? 0) / w, x1 = 1 - (cut.right ?? 0) / w;
     const y0 = (cut.top ?? 0) / h, y1 = 1 - (cut.bottom ?? 0) / h;
@@ -212,7 +216,8 @@ function filmEdge(img, L, s, span) {
   const mid = median(found.map((e) => e.out));
   const ok = found.filter((e) => Math.abs(e.out - mid) <= long * 0.03);
   if (ok.length < 2) return null;
-  const rims = ok.map((e) => e.rim).filter((r) => r != null);
+  const rimmed = ok.filter((e) => e.rim != null);
+  const rims = rimmed.map((e) => e.rim);
   // How the edge moves along the side (for straightening), from the outer
   // and inner sections. Needs both ends.
   let slope = null;
@@ -222,10 +227,16 @@ function filmEdge(img, L, s, span) {
     for (const e of ok) { sxy += (e.at - mx) * (e.sub - my); sxx += (e.at - mx) ** 2; }
     slope = sxy / sxx;
   }
-  return { film: Math.max(...ok.map((e) => e.out)), rim: rims.length ? median(rims) : null, slope };
+  return {
+    film: Math.max(...ok.map((e) => e.out)),
+    rim: rims.length ? median(rims) : null,
+    rimL: rims.length ? median(rimmed.map((e) => e.rimL)) : null,
+    slope,
+  };
 }
 
-// One section of a side: where the film starts, and its rim width if visible.
+// One section of a side: where the film starts, and its rim width and
+// brightness if visible.
 function segmentEdge(notMount, darkFrac, lineL, maxDepth, persist, long) {
   // Outer edge of the film: a line of dark rim right across, or where the
   // line stops being mount and stays that way (the picture itself, when it's
@@ -263,7 +274,7 @@ function segmentEdge(notMount, darkFrac, lineL, maxDepth, persist, long) {
   // Sub-pixel edge position: where the line crosses half "not mount".
   const prev = notMount[out - 1], cur = Math.max(notMount[out], darkFrac[out]);
   const sub = cur > prev ? out - 1 + clamp((0.5 - prev) / (cur - prev), 0, 1) : out;
-  return { out, rim, sub };
+  return { out, rim, rimL: lineL[lo], sub };
 }
 
 // Rotate an image by angle degrees clockwise about its centre (edges are
