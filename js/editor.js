@@ -1,5 +1,5 @@
 // Single-photo editor: Auto Fix, sliders, before/after, crop and straighten,
-// rotate, dust removal, zoom, save.
+// rotate, dust removal, zoom, undo/redo, save.
 
 import {
   prepare, renderPreview, renderUncropped, renderDetail, setCrop, forget, exportJpeg, rotatedOriginal, latestOnly,
@@ -77,6 +77,7 @@ function syncControls() {
   autoBtn.querySelector('use').setAttribute('href', photo.useAuto ? '#i-check' : '#i-auto');
   autoBtn.querySelector('.auto-label').textContent = photo.useAuto ? 'Auto Fix is on' : 'Auto Fix';
   $('btn-dust').setAttribute('aria-pressed', String(photo.dust));
+  syncHistoryButtons();
 }
 
 // The number beside each slider name: 0 in the middle, +/- either side.
@@ -108,6 +109,7 @@ export async function openEditor(p, { inBatch = false, onBack } = {}) {
     const h = await prepare(photo, previewSize());
     handle = h;
     original = h.original;
+    commit();
     syncControls();
     refresh();
   } catch (err) {
@@ -130,6 +132,76 @@ function changed() {
   refresh();
 }
 
+// ---------- Undo / redo ----------
+// Each photo keeps its own history of settings. A step is recorded once a
+// change is finished (a slider let go, a button tapped), so dragging a slider
+// is one step rather than dozens.
+
+const HISTORY_MAX = 100;
+
+function snapshot() {
+  return { useAuto: photo.useAuto, dust: photo.dust, adj: { ...photo.adj }, rot: photo.rot, crop: photo.crop };
+}
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+function history() {
+  photo.history ??= { undo: [], redo: [], at: snapshot() };
+  return photo.history;
+}
+
+// Record the current settings as a new step, if they've changed.
+function commit() {
+  const hist = history();
+  const now = snapshot();
+  if (same(now, hist.at)) { syncHistoryButtons(); return; }
+  hist.undo.push(hist.at);
+  if (hist.undo.length > HISTORY_MAX) hist.undo.shift();
+  hist.redo = [];
+  hist.at = now;
+  syncHistoryButtons();
+}
+
+function syncHistoryButtons() {
+  const hist = photo?.history;
+  $('btn-undo').disabled = !hist?.undo.length;
+  $('btn-redo').disabled = !hist?.redo.length;
+}
+
+let stepping = false;
+async function step(from, to) {
+  if (stepping || cropRect || !handle || !from.length) return;
+  stepping = true;
+  const hist = history();
+  const s = from.pop();
+  to.push(hist.at);
+  hist.at = s;
+  const reframe = s.rot !== photo.rot || !same(s.crop, photo.crop);
+  Object.assign(photo, { useAuto: s.useAuto, dust: s.dust, adj: { ...s.adj }, rot: s.rot });
+  try {
+    if (!same(s.crop, photo.crop)) await withBusy(() => setCrop(photo, s.crop));
+  } catch (err) {
+    console.error(err);
+    toast(friendlyError(err));
+  } finally {
+    stepping = false;
+  }
+  if (reframe) resetZoom();
+  syncControls();
+  changed();
+}
+const undo = () => step(history().undo, history().redo);
+const redo = () => step(history().redo, history().undo);
+
+$('btn-undo').addEventListener('click', undo);
+$('btn-redo').addEventListener('click', redo);
+
+window.addEventListener('keydown', (e) => {
+  if (!editor.classList.contains('active') || !(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+});
+
 autoBtn.addEventListener('click', async () => {
   photo.useAuto = true;
   photo.dust = true;
@@ -138,6 +210,7 @@ autoBtn.addEventListener('click', async () => {
   resetZoom();
   syncControls();
   changed();
+  commit();
   const a = photo.autoCrop;
   toast(!a ? 'Auto Fix applied'
     : a.angle ? 'Auto Fix applied, border cropped off and picture straightened'
@@ -156,12 +229,14 @@ sliders.forEach((s) => {
     showValue(s);
     changed();
   });
+  s.addEventListener('change', commit); // let go
   // Double-tap a slider to centre it.
   s.addEventListener('dblclick', () => {
     s.value = 0;
     photo.adj[s.dataset.adj] = 0;
     showValue(s);
     changed();
+    commit();
   });
 });
 
@@ -174,6 +249,7 @@ $('btn-reset').addEventListener('click', async () => {
   resetZoom();
   syncControls();
   changed();
+  commit();
   toast('Back to the original');
 });
 
@@ -181,12 +257,14 @@ $('btn-rotate').addEventListener('click', () => {
   photo.rot = (photo.rot + 1) % 4;
   resetZoom();
   changed();
+  commit();
 });
 
 $('btn-dust').addEventListener('click', () => {
   photo.dust = !photo.dust;
   syncControls();
   changed();
+  commit();
   toast(photo.dust ? 'Removing dust specks' : 'Dust removal off');
 });
 
@@ -480,6 +558,7 @@ $('crop-done').addEventListener('click', async () => {
   }
   endCropMode();
   changed();
+  commit();
 });
 
 async function makeJpeg() {

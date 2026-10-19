@@ -18,7 +18,8 @@ photos are never uploaded anywhere.
   from how grainy the scan is (busy pictures, where grain is hard to see, get none); the slider adds or removes it.
 - **Zoom**: pinch the photo (or double-tap it) to look closely; drag to move around. When you stop moving, the part
   on screen is shown at the scan's full resolution. **Zoom out** (or double-tap again) goes back.
-- Double-tap a slider to centre it again. **↺ Start again** undoes everything.
+- **Undo** and **Redo** step back and forward through your changes to a photo (Ctrl+Z / Ctrl+Y with a keyboard).
+  Double-tap a slider to centre it again. **↺ Start again** undoes everything (and can itself be undone).
 
 ## Installing on the Android tablet
 1. Open the app's web address (see *Hosting* below) in **Chrome** on the tablet.
